@@ -1,0 +1,81 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    /* DEFAULT DARK THEME (Moved from .dark and adjusted) */
+    --background: 0 0% 0%;
+    /* Deep Black */
+    --foreground: 0 0% 98%;
+
+    --card: 0 0% 4%;
+    --card-foreground: 0 0% 98%;
+
+    --popover: 0 0% 4%;
+    --popover-foreground: 0 0% 98%;
+
+    --primary: 45 93% 47%;
+    /* Gold/Electric Yellow */
+    --primary-foreground: 0 0% 10%;
+
+    --secondary: 0 0% 12%;
+    --secondary-foreground: 0 0% 98%;
+
+    --muted: 0 0% 12%;
+    --muted-foreground: 0 0% 63%;
+
+    --accent: 0 0% 12%;
+    --accent-foreground: 0 0% 98%;
+
+    --destructive: 0 62.8% 30.6%;
+    --destructive-foreground: 0 0% 98%;
+
+    --border: 0 0% 12%;
+    --input: 0 0% 12%;
+    --ring: 45 93% 47%;
+
+    --radius: 0.5rem;
+  }
+
+  /* Optional: Keep light values behind a .light class just in case, but unused by default */
+  .light {
+    --background: 0 0% 100%;
+    --foreground: 0 0% 10%;
+
+    --card: 0 0% 100%;
+    --card-foreground: 0 0% 10%;
+
+    --popover: 0 0% 100%;
+    --popover-foreground: 0 0% 10%;
+
+    --primary: 45 93% 47%;
+    --primary-foreground: 0 0% 10%;
+
+    --secondary: 0 0% 96%;
+    --secondary-foreground: 0 0% 10%;
+
+    --muted: 0 0% 96%;
+    --muted-foreground: 0 0% 40%;
+
+    --accent: 0 0% 96%;
+    --accent-foreground: 0 0% 10%;
+
+    --destructive: 0 84% 60%;
+    --destructive-foreground: 0 0% 98%;
+
+    --border: 0 0% 90%;
+    --input: 0 0% 90%;
+    --ring: 45 93% 47%;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+
+  body {
+    @apply bg-background text-foreground;
+  }
+}

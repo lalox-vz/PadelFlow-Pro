@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 300 100" fill="none">
+    <text
+        x="65"
+        y="60"
+        style="font-weight: 900; letter-spacing: -0.05em; font-family: sans-serif; font-size: 60px;"
+        fill="#000000"
+    >
+        LIMPO
+    </text>
+    <path
+        d="M25 45L15 25H25L23 5H35L45 25H35L37 45H25Z"
+        fill="#4F46E5"
+        stroke="#FFFFFF"
+        stroke-width="2"
+    />
+    <circle
+        cx="25"
+        cy="25"
+        r="22"
+        stroke="#000000"
+        stroke-width="8"
+        fill="none"
+    />
+</svg>

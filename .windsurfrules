@@ -1,0 +1,42 @@
+# PADELFLOW AI INSTRUCTIONS (The Memory Rod)
+
+## 1. MANDATORY CONTEXT
+Antes de cada tarea, debes listar qué secciones de @CORE_PROJECT_DOC.md vas a consultar. Si no confirmas que leíste la 'Única Fuente de Verdad', no procedas.
+
+## 2. ARCHITECTURE INTEGRITY (SQL-ONLY)
+- PROHIBIDO reintroducir lógica de configuración basada en JSON (`entities.details`) para canchas, horarios o precios.
+- TODA nueva entidad física o regla de negocio debe vivir en una tabla SQL relacional.
+- Verifica siempre la existencia de `recurring_plan_id` en la tabla `bookings` para proteger la lógica de Socios Fijos.
+
+## 3. SECURITY & RBAC RULES
+- NUNCA des acceso a 'club_staff' a: `/team`, `/club/revenue` o `/club/settings`.
+- Filtro Obligatorio: Todas las consultas (SELECT/UPDATE/DELETE) deben incluir `organization_id` o `entity_id`.
+- Roles oficiales: 'platform_admin', 'club_owner', 'academy_owner', 'club_staff', 'coach', 'player', 'student'.
+- **NUEVO**: Cualquier nuevo módulo o ruta DEBE estar protegido por el Sistema de Permisos Modulares (doble check: Sidebar + Middleware).
+- Ruta de escape por defecto ante acceso denegado: `/club/calendar`.
+
+## 4. LOCALIZATION & STYLE
+- Interfaz: Español (Venezuela).
+- Moneda: '$' (USD).
+- Fechas: 'dd/MM/yyyy'.
+- Si una cancha está inactiva, mostrar "(Inactiva)" junto al nombre en las listas.
+
+## 5. PROHIBICIONES (NO-GO ZONES)
+- NO modifiques el esquema de `bookings` sin validar el impacto en `booking_logs`.
+- NO uses IDs hardcoded; consulta siempre el `org_id` del perfil de usuario activo.
+- PROHIBIDO usar la lógica de fallback al JSON que fue eliminada en la migración a Nivel 3.
+
+## 6. AUTO-UPDATE PROTOCOL
+Si una tarea modifica el esquema de base de datos (SQL) o los permisos, es obligatorio actualizar @CORE_PROJECT_DOC.md al finalizar.
+
+## 7. CRITICAL EXECUTION PROTOCOL
+- **Validation First**: Antes de decir "arreglado", verifica si el conteo en la interfaz coincide con los registros reales de la tabla de auditoría.
+- **No Invisible Logic**: Si una reserva cambia de color o estado por una regla automática (como un Socio Fijo), la UI debe explicar "por qué" mediante un tooltip o etiqueta.
+- **Strict Year View**: En el Dashboard, el rango "Año Actual" es sagrado; no se permiten vistas diarias para este periodo.
+- **Context Confirmation**: Antes de proceder, confirma que has leído la "Sección 0. Bitácora de Integridad" del CORE_PROJECT_DOC.md.
+
+## 8.PROTECCION DE DATOS
+Si el cambio afecta a los 'Socios Fijos', verifica siempre la integridad del recurring_plan_id en la tabla de reservas.
+
+## 9.VALIDACION DE UI/UX
+Si el cambio afecta la interfaz, asegúrate de que siga la jerarquía visual: acciones principales obvias, sin elementos escondidos y texto en Español (Venezuela).
