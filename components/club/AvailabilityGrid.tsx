@@ -27,6 +27,8 @@ import { Lock, Plus, User, CheckCircle2, Settings, AlertCircle, Clock, Banknote,
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { createBrowserClient } from "@supabase/ssr"
 import { MemberSelector } from "./MemberSelector"
+import PhoneInput from 'react-phone-number-input'
+import 'react-phone-number-input/style.css'
 
 // Extended Booking Interface for UI display
 export interface GridBooking extends ExistingBooking {
@@ -36,6 +38,7 @@ export interface GridBooking extends ExistingBooking {
     totalPrice?: number // Price from database
     participant_checkin?: boolean
     recurring_plan_id?: string | null
+    description?: string | null
 }
 
 interface AvailabilityGridProps {
@@ -95,6 +98,7 @@ export function AvailabilityGrid({
     const [bookingForm, setBookingForm] = useState({
         name: '',
         userId: null as string | null,
+        phone: '',
         isPaid: false,
         startTime: new Date(),
         endTime: new Date(),
@@ -169,6 +173,7 @@ export function AvailabilityGrid({
         setBookingForm({
             name: '',
             userId: null,
+            phone: '',
             isPaid: false,
             startTime: new Date(),
             endTime: new Date(),
@@ -200,6 +205,7 @@ export function AvailabilityGrid({
         setBookingForm({
             name: booking.title || '',
             userId: null, // Edit doesn't support changing user link strictly yet, or we'd need to fetch it
+            phone: '',
             isPaid: booking.paymentStatus === 'paid',
             startTime: new Date(booking.startTime),
             endTime: new Date(booking.endTime),
@@ -399,6 +405,11 @@ export function AvailabilityGrid({
                 price: selectedSlot.price
             })
 
+            // Construct description with phone if provided and not registered
+            const description = bookingForm.phone && !bookingForm.userId
+                ? `TLF: ${bookingForm.phone}`
+                : undefined
+
             await onCreateBooking({
                 courtId: selectedSlot.courtId,
                 startTime: selectedSlot.startTime,
@@ -406,8 +417,18 @@ export function AvailabilityGrid({
                 name: bookingForm.name,
                 isPaid: bookingForm.isPaid,
                 price: selectedSlot.price,
-                userId: bookingForm.userId
-            })
+                userId: bookingForm.userId,
+                // Pass description via a new property if interface allowed, or append to name? 
+                // Wait, onCreateBooking interface doesn't have description.
+                // We need to update the Interface in Props first?
+                // Actually, the parent handles it. But we pass { ... }.
+                // If I can't pass description, I might append to title? No, title is visible.
+                // I will add 'description' to the onCreateBooking argument in the call, 
+                // assuming the parent function `handleCreateBooking` in page.tsx will handle it.
+                // I'll check `ClubCalendarPage` `handleCreateBooking` next step.
+                // For now, I'll pass it as an extra property.
+                description: description
+            } as any)
             setSelectedSlot(null) // Close modal
         } catch (error) {
             console.error(error)
@@ -606,6 +627,22 @@ export function AvailabilityGrid({
                             </div>
                         </div>
 
+                        {!bookingForm.userId && (
+                            <div className="space-y-2">
+                                <Label>Teléfono (Obligatorio para Manuales)</Label>
+                                <PhoneInput
+                                    placeholder="Ingresa número de teléfono"
+                                    defaultCountry="VE"
+                                    value={bookingForm.phone}
+                                    onChange={(value) => setBookingForm(prev => ({ ...prev, phone: value || '' }))}
+                                    className="flex h-10 w-full rounded-md border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm ring-offset-background file:border-0 file:bg-transparent file:text-sm file:font-medium placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
+                                />
+                                <p className="text-[10px] text-zinc-500">
+                                    Necesario para rastrear el historial del cliente (Reservas, Pagos, etc).
+                                </p>
+                            </div>
+                        )}
+
                         <div className="flex items-center space-x-2 bg-zinc-900 p-3 rounded-lg border border-zinc-800">
                             <Checkbox
                                 id="isPaid"
@@ -630,7 +667,7 @@ export function AvailabilityGrid({
                         </Button>
                         <Button
                             onClick={submitBooking}
-                            disabled={isSubmitting || !bookingForm.name.trim() || bookingForm.name.trim().toLowerCase() === 'reserva'}
+                            disabled={isSubmitting || !bookingForm.name.trim() || bookingForm.name.trim().toLowerCase() === 'reserva' || (!bookingForm.userId && !bookingForm.phone)}
                             className="bg-emerald-600 hover:bg-emerald-700 text-white"
                         >
                             {isSubmitting ? 'Confirmando...' : 'Confirmar Reserva'}

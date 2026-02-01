@@ -24,6 +24,7 @@ import { SmartRevenueChart } from "@/components/club/dashboard/SmartRevenueChart
 import { supabase } from "@/lib/supabase"
 import { startOfMonth, endOfMonth, subDays, addDays, format, isValid, parseISO } from "date-fns"
 import { es } from "date-fns/locale"
+import { parsePhoneNumber } from 'react-phone-number-input'
 
 interface PendingBooking {
     id: string
@@ -33,6 +34,15 @@ interface PendingBooking {
     court: { name: string } | null
     user: { full_name: string, phone: string } | null
     original_title?: string
+}
+
+interface ActiveClient {
+    id: string
+    full_name: string
+    phone: string
+    count: number
+    spent: number
+    lastDate: string
 }
 
 export default function ClubDashboardPage() {
@@ -68,6 +78,13 @@ export default function ClubDashboardPage() {
 
     const [todayBookings, setTodayBookings] = useState(0)
     const [popularCourts, setPopularCourts] = useState<any[]>([])
+
+    // Active Clients State
+    const [activeClientsList, setActiveClientsList] = useState<ActiveClient[]>([])
+    const [activeClientsSheetOpen, setActiveClientsSheetOpen] = useState(false)
+    const [loadingActiveClients, setLoadingActiveClients] = useState(false)
+    const [activeClientsSearch, setActiveClientsSearch] = useState("")
+    const [activeClientsDateFilter, setActiveClientsDateFilter] = useState("")
 
     useEffect(() => {
         if (profile?.role === 'club_staff') {
@@ -296,6 +313,115 @@ export default function ClubDashboardPage() {
         }
     }, [fetchPendingPayments, sheetOpen])
 
+    const fetchActiveClients = useCallback(async () => {
+        if (!profile?.organization_id) return
+
+        setLoadingActiveClients(true)
+        try {
+            const now = new Date()
+            let start = startOfMonth(now).toISOString()
+            let end = endOfMonth(now).toISOString()
+
+            // Apply Date Filter if present (Matches Dashboard logic or Specific Day)
+            if (activeClientsDateFilter) {
+                const startDay = new Date(activeClientsDateFilter)
+                startDay.setUTCHours(4, 0, 0, 0) // 00:00 VET
+
+                const endDay = new Date(startDay)
+                endDay.setUTCDate(endDay.getUTCDate() + 1)
+                endDay.setUTCHours(3, 59, 59, 999) // 23:59 VET
+
+                start = startDay.toISOString()
+                end = endDay.toISOString()
+            }
+
+            // 1. Fetch Paid Bookings
+            const { data: bookings } = await supabase
+                .from('bookings')
+                .select('user_id, price, start_time')
+                .eq('entity_id', profile.organization_id)
+                .in('payment_status', ['paid', 'approved', 'completed'])
+                .gte('start_time', start)
+                .lte('start_time', end)
+
+            if (!bookings || bookings.length === 0) {
+                setActiveClientsList([])
+                return
+            }
+
+            // 2. Aggregate Data
+            const userStats: Record<string, { count: number, spent: number, lastDate: string }> = {}
+            const userIds = new Set<string>()
+
+            bookings.forEach((b: any) => {
+                if (!b.user_id) return
+                userIds.add(b.user_id)
+
+                if (!userStats[b.user_id]) {
+                    userStats[b.user_id] = { count: 0, spent: 0, lastDate: b.start_time }
+                }
+
+                userStats[b.user_id].count += 1
+                userStats[b.user_id].spent += (b.price || 0)
+
+                if (b.start_time > userStats[b.user_id].lastDate) {
+                    userStats[b.user_id].lastDate = b.start_time
+                }
+            })
+
+            // 3. Fetch User Details
+            let usersMap: Record<string, any> = {}
+            if (userIds.size > 0) {
+                const { data: usersData } = await supabase
+                    .from('users')
+                    .select('id, full_name, phone')
+                    .in('id', Array.from(userIds))
+
+                if (usersData) {
+                    usersData.forEach((u: any) => { usersMap[u.id] = u })
+                }
+            }
+
+            // 4. Merge
+            let clients: ActiveClient[] = Array.from(userIds).map(uid => {
+                const user = usersMap[uid]
+                const stats = userStats[uid]
+                return {
+                    id: uid,
+                    full_name: user?.full_name || 'Cliente',
+                    phone: user?.phone || '',
+                    ...stats
+                }
+            })
+
+            // 5. Client-side Filter
+            if (activeClientsSearch) {
+                const lower = activeClientsSearch.toLowerCase()
+                clients = clients.filter(c =>
+                    c.full_name.toLowerCase().includes(lower) ||
+                    c.phone.includes(lower)
+                )
+            }
+
+            // Sort: High Value (Total Spent) Descending
+            clients.sort((a, b) => b.spent - a.spent)
+
+            setActiveClientsList(clients)
+
+        } catch (error) {
+            console.error('Error fetching active clients:', error)
+        } finally {
+            setLoadingActiveClients(false)
+        }
+    }, [profile?.organization_id, activeClientsSearch, activeClientsDateFilter])
+
+    // Load Active Clients when sheet opens
+    useEffect(() => {
+        if (activeClientsSheetOpen) {
+            fetchActiveClients()
+        }
+    }, [activeClientsSheetOpen, fetchActiveClients])
+
     const formatCurrency = (value: number) => {
         return new Intl.NumberFormat('es-VE', { style: 'currency', currency: 'USD' }).format(value)
     }
@@ -369,6 +495,18 @@ export default function ClubDashboardPage() {
         if (!phone.startsWith('58')) phone = '58' + phone
 
         const message = `Hola ${booking.user.full_name}, te recordamos que tienes un pago pendiente de ${formatCurrency(booking.price)} por tu reserva de Padel el ${format(new Date(booking.start_time), "dd/MM")} a las ${format(new Date(booking.start_time), "HH:mm")}.`
+
+        window.open(`https://wa.me/${phone}?text=${encodeURIComponent(message)}`, '_blank')
+    }
+
+    const handleContactClient = (client: ActiveClient) => {
+        if (!client.phone) return
+
+        let phone = client.phone.replace(/\D/g, '')
+        if (phone.startsWith('0')) phone = '58' + phone.substring(1)
+        if (!phone.startsWith('58')) phone = '58' + phone
+
+        const message = `Hola ${client.full_name}, vimos que has estado activo este mes en el club. ¡Gracias por tu preferencia!`
 
         window.open(`https://wa.me/${phone}?text=${encodeURIComponent(message)}`, '_blank')
     }
@@ -622,19 +760,124 @@ export default function ClubDashboardPage() {
                     </CardContent>
                 </Card>
 
-                {/* Active Clients */}
-                <Card>
-                    <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                        <CardTitle className="text-sm font-medium">Clientes Activos</CardTitle>
-                        <Users className="h-4 w-4 text-purple-500" />
-                    </CardHeader>
-                    <CardContent>
-                        <div className="text-2xl font-bold">{stats.kpi.activeClients || 0}</div>
-                        <p className="text-xs text-muted-foreground">
-                            {stats.kpi.clientsGrowth >= 0 ? '+' : ''}{stats.kpi.clientsGrowth?.toFixed(1) || 0}% vs mes anterior
-                        </p>
-                    </CardContent>
-                </Card>
+                {/* Active Clients Sheet */}
+                <Sheet open={activeClientsSheetOpen} onOpenChange={setActiveClientsSheetOpen}>
+                    <SheetTrigger asChild>
+                        <Card className="cursor-pointer transition-all hover:bg-accent hover:border-purple-500/50 group">
+                            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+                                <CardTitle className="text-sm font-medium">Clientes Activos</CardTitle>
+                                <Users className="h-4 w-4 text-purple-500" />
+                            </CardHeader>
+                            <CardContent>
+                                <div className="flex items-center justify-between">
+                                    <div>
+                                        <div className="text-2xl font-bold">{stats.kpi.activeClients || 0}</div>
+                                        <p className="text-xs text-muted-foreground">
+                                            {stats.kpi.clientsGrowth >= 0 ? '+' : ''}{stats.kpi.clientsGrowth?.toFixed(1) || 0}% vs mes anterior
+                                        </p>
+                                    </div>
+                                    <ChevronRight className="h-5 w-5 opacity-0 group-hover:opacity-100 transition-opacity text-purple-500" />
+                                </div>
+                            </CardContent>
+                        </Card>
+                    </SheetTrigger>
+                    <SheetContent className="bg-zinc-950 border-zinc-800 w-[400px] sm:w-[540px] flex flex-col h-full">
+                        <SheetHeader className="pb-4 border-b border-zinc-800">
+                            <SheetTitle className="text-white flex items-center gap-2">
+                                <Users className="h-5 w-5 text-purple-500" />
+                                Clientes Activos ({activeClientsList.length})
+                            </SheetTitle>
+                            <SheetDescription className="text-zinc-400">
+                                Tus mejores clientes {activeClientsDateFilter ? 'del día seleccionado' : 'de este mes'}.
+                            </SheetDescription>
+                        </SheetHeader>
+
+                        {/* Controls */}
+                        <div className="py-4 space-y-4">
+                            <div className="flex gap-2">
+                                <div className="relative flex-1">
+                                    <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
+                                    <Input
+                                        placeholder="Buscar por nombre..."
+                                        className="pl-9 bg-zinc-900 border-zinc-700"
+                                        value={activeClientsSearch}
+                                        onChange={(e) => setActiveClientsSearch(e.target.value)}
+                                    />
+                                </div>
+                                <Input
+                                    type="date"
+                                    className="w-[140px] bg-zinc-900 border-zinc-700"
+                                    value={activeClientsDateFilter}
+                                    onChange={(e) => setActiveClientsDateFilter(e.target.value)}
+                                />
+                            </div>
+                        </div>
+
+                        {/* List */}
+                        <div className="flex-1 overflow-y-auto pr-2 space-y-3 -mr-2">
+                            {loadingActiveClients ? (
+                                <div className="flex justify-center items-center h-48">
+                                    <Loader2 className="h-8 w-8 animate-spin text-purple-500" />
+                                </div>
+                            ) : activeClientsList.length > 0 ? (
+                                activeClientsList.map((client) => (
+                                    <div
+                                        key={client.id}
+                                        className="p-3 rounded-lg bg-zinc-900 border border-zinc-800 hover:border-purple-500/30 transition-colors flex items-center justify-between group/item"
+                                    >
+                                        <div className="flex items-center gap-3">
+                                            <div className="h-10 w-10 rounded-full bg-purple-500/10 flex items-center justify-center border border-purple-500/20">
+                                                <span className="text-purple-400 font-semibold text-sm">
+                                                    {client.full_name.substring(0, 2).toUpperCase()}
+                                                </span>
+                                            </div>
+                                            <div>
+                                                <div className="font-medium text-white">{client.full_name}</div>
+                                                <div className="text-xs text-zinc-400 flex items-center gap-2">
+                                                    <span className="text-purple-400 font-medium">
+                                                        {client.count} reservas
+                                                    </span>
+                                                    <span>•</span>
+                                                    <span>Ultima: {format(new Date(client.lastDate), "d MMM", { locale: es })}</span>
+                                                </div>
+                                            </div>
+                                        </div>
+
+                                        <div className="flex items-center gap-4">
+                                            <div className="text-right">
+                                                <div className="text-sm font-bold text-emerald-500">
+                                                    {formatCurrency(client.spent)}
+                                                </div>
+                                                <div className="text-[10px] text-zinc-500 uppercase tracking-wider">
+                                                    Total Gastado
+                                                </div>
+                                            </div>
+
+                                            {client.phone && (
+                                                <Button
+                                                    size="icon"
+                                                    variant="ghost"
+                                                    className="h-8 w-8 text-zinc-400 hover:text-green-500 hover:bg-green-500/10 opacity-0 group-hover/item:opacity-100 transition-all"
+                                                    onClick={(e) => {
+                                                        e.stopPropagation()
+                                                        handleContactClient(client)
+                                                    }}
+                                                >
+                                                    <MessageCircle className="h-4 w-4" />
+                                                </Button>
+                                            )}
+                                        </div>
+                                    </div>
+                                ))
+                            ) : (
+                                <div className="text-center py-12 text-zinc-500">
+                                    <Users className="h-12 w-12 mx-auto text-zinc-700 mb-3" />
+                                    <p>No se encontraron clientes activos en este periodo.</p>
+                                </div>
+                            )}
+                        </div>
+                    </SheetContent>
+                </Sheet>
             </div>
 
             <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-7">

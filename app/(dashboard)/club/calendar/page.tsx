@@ -157,11 +157,18 @@ export default function ClubCalendarPage() {
         }
     }
 
-    const handleCreateBooking = async (booking: { courtId: string, startTime: Date, endTime: Date, name: string, isPaid: boolean, price: number, userId?: string | null }) => {
+    const handleCreateBooking = async (booking: { courtId: string, startTime: Date, endTime: Date, name: string, isPaid: boolean, price: number, userId?: string | null, description?: string }) => {
         if (!orgId) return
         try {
             const newBooking: GridBooking = {
-                id: 'temp-' + Date.now(), courtId: booking.courtId, startTime: booking.startTime, endTime: booking.endTime, title: booking.name, paymentStatus: booking.isPaid ? 'paid' : 'pending', totalPrice: booking.price
+                id: 'temp-' + Date.now(),
+                courtId: booking.courtId,
+                startTime: booking.startTime,
+                endTime: booking.endTime,
+                title: booking.name,
+                paymentStatus: booking.isPaid ? 'paid' : 'pending',
+                totalPrice: booking.price,
+                description: booking.description
             }
             setBookings(prev => [...prev, newBooking])
 
@@ -171,6 +178,7 @@ export default function ClubCalendarPage() {
                 start_time: booking.startTime.toISOString(),
                 end_time: booking.endTime.toISOString(),
                 title: booking.name,
+                description: booking.description,
                 payment_status: booking.isPaid ? 'paid' : 'pending',
                 user_id: booking.userId || null,
                 price: booking.price
