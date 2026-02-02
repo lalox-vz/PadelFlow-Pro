@@ -25,6 +25,7 @@ import { supabase } from "@/lib/supabase"
 import { startOfMonth, endOfMonth, subDays, addDays, format, isValid, parseISO } from "date-fns"
 import { es } from "date-fns/locale"
 import { parsePhoneNumber } from 'react-phone-number-input'
+import { TopSpenders } from "@/components/dashboard/TopSpenders"
 
 interface PendingBooking {
     id: string
@@ -927,6 +928,13 @@ export default function ClubDashboardPage() {
                         </div>
                     </CardContent>
                 </Card>
+            </div>
+
+            {/* Financial Intelligence Section */}
+            <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-7">
+                <div className="col-span-full lg:col-span-3">
+                    <TopSpenders />
+                </div>
             </div>
 
             {/* Academy Hosting Requests Section */}
