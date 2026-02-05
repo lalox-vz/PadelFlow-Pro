@@ -1,42 +1,56 @@
-# PADELFLOW AI INSTRUCTIONS (The Memory Rod)
+# PADELFLOW CRITICAL PROTOCOL (THE IRON LAW)
 
-## 1. MANDATORY CONTEXT
-Antes de cada tarea, debes listar qué secciones de @CORE_PROJECT_DOC.md vas a consultar. Si no confirmas que leíste la 'Única Fuente de Verdad', no procedas.
+## 0. PRE-FLIGHT CHECK (OBLIGATORIO)
+Antes de generar una sola línea de código o respuesta, DEBES ejecutar estos pasos mentalmente:
+1.  Leer el archivo `CORE_ARCHITECTURE.md` (V3) en la raíz.
+2.  Verificar si tu tarea toca alguna tabla de la "Base de Datos".
+3.  Verificar si tu tarea viola alguna regla de la sección "THE KILL LIST".
 
-## 2. ARCHITECTURE INTEGRITY (SQL-ONLY)
-- PROHIBIDO reintroducir lógica de configuración basada en JSON (`entities.details`) para canchas, horarios o precios.
-- TODA nueva entidad física o regla de negocio debe vivir en una tabla SQL relacional.
-- Verifica siempre la existencia de `recurring_plan_id` en la tabla `bookings` para proteger la lógica de Socios Fijos.
+## 0.1 SKILL ROUTING (AUTO-PILOT)
+Before answering, analyze the user's request to detect intent. IF the request matches a Skill Trigger, you MUST adopt that Persona:
 
-## 3. SECURITY & RBAC RULES
-- NUNCA des acceso a 'club_staff' a: `/team`, `/club/revenue` o `/club/settings`.
-- Filtro Obligatorio: Todas las consultas (SELECT/UPDATE/DELETE) deben incluir `organization_id` o `entity_id`.
-- Roles oficiales: 'platform_admin', 'club_owner', 'academy_owner', 'club_staff', 'coach', 'player', 'student'.
-- **NUEVO**: Cualquier nuevo módulo o ruta DEBE estar protegido por el Sistema de Permisos Modulares (doble check: Sidebar + Middleware).
-- Ruta de escape por defecto ante acceso denegado: `/club/calendar`.
+- If intent is **Visual/CSS/UI** -> ACTIVATE `.agent/skills/analyzing-ui`
+- If intent is **Database/Schema** -> ACTIVATE `.agent/skills/guarding-architecture`
+- If intent is **Logic/Calc/Bug** -> ACTIVATE `.agent/skills/auditing-logic`
 
-## 4. LOCALIZATION & STYLE
-- Interfaz: Español (Venezuela).
-- Moneda: '$' (USD).
-- Fechas: 'dd/MM/yyyy'.
-- Si una cancha está inactiva, mostrar "(Inactiva)" junto al nombre en las listas.
+**Output Indicator:**
+Start your thought process with: "🧩 Skill Activated: [Name]"
 
-## 5. PROHIBICIONES (NO-GO ZONES)
-- NO modifiques el esquema de `bookings` sin validar el impacto en `booking_logs`.
-- NO uses IDs hardcoded; consulta siempre el `org_id` del perfil de usuario activo.
-- PROHIBIDO usar la lógica de fallback al JSON que fue eliminada en la migración a Nivel 3.
+**TU PRIMERA LÍNEA DE RESPUESTA SIEMPRE DEBE SER:**
+> "🛡️ Arquitectura V3 Verificada. [Mencionar qué sección aplica a esta tarea]"
 
-## 6. AUTO-UPDATE PROTOCOL
-Si una tarea modifica el esquema de base de datos (SQL) o los permisos, es obligatorio actualizar @CORE_PROJECT_DOC.md al finalizar.
+## 1. INTEGRIDAD DE ARQUITECTURA (SQL-ONLY)
+- **Strict Types:** `court_id` es UUID. `user_id` es UUID. NO inventes texto plano.
+- **Link Perdido:** Si tocas `bookings`, recuerda que falta `member_id`. Si vas a insertar, ALERTA si no estás solucionando eso primero.
+- **No JSON:** Toda configuración va a tablas SQL (`opening_hours`, etc).
 
-## 7. CRITICAL EXECUTION PROTOCOL
-- **Validation First**: Antes de decir "arreglado", verifica si el conteo en la interfaz coincide con los registros reales de la tabla de auditoría.
-- **No Invisible Logic**: Si una reserva cambia de color o estado por una regla automática (como un Socio Fijo), la UI debe explicar "por qué" mediante un tooltip o etiqueta.
-- **Strict Year View**: En el Dashboard, el rango "Año Actual" es sagrado; no se permiten vistas diarias para este periodo.
-- **Context Confirmation**: Antes de proceder, confirma que has leído la "Sección 0. Bitácora de Integridad" del CORE_PROJECT_DOC.md.
+## 2. SEGURIDAD BLINDADA
+- **Role-Gate:** NUNCA des acceso a 'club_staff' a rutas financieras o de configuración.
+- **Scope-Gate:** Todo Query SQL debe filtrar por `entity_id` o `organization_id`.
 
-## 8.PROTECCION DE DATOS
-Si el cambio afecta a los 'Socios Fijos', verifica siempre la integridad del recurring_plan_id en la tabla de reservas.
+## 3. PROTOCOLO DE AUTO-ACTUALIZACIÓN (DEFINITION OF DONE)
+Una tarea NO está terminada hasta que hayas actualizado la documentación.
+- Si cambiaste Schema SQL -> Actualiza `CORE_ARCHITECTURE.md` (Sección 1 o 2).
+- Si arreglaste un Bug Lógico -> Mueve el item de la "Kill List" a "Solucionados".
+- **Al final de tu respuesta, CONFIRMA:** "📝 Documentación actualizada: [Nombre del cambio]" o "📝 Sin cambios en doc requeridos".
 
-## 9.VALIDACION DE UI/UX
-Si el cambio afecta la interfaz, asegúrate de que siga la jerarquía visual: acciones principales obvias, sin elementos escondidos y texto en Español (Venezuela).
+## 4. CONTEXTO LOCAL
+- Idioma: Español (Venezuela).
+- Moneda: USD ($).
+- Stack: Next.js 14, Supabase, Tailwind, Shadcn.
+
+## 5. PROTOCOLO DE VERDAD (ANTI-ALUCINACIÓN)
+Cuando se te pida auditar tipos de datos o esquema (Schema Check):
+1. PROHIBIDO asumir el tipo de dato basándose en el código TypeScript.
+2. OBLIGATORIO: Debes razonar como si consultaras `information_schema` en SQL.
+3. Si vas a crear una relación (Foreign Key), SIEMPRE asume que el dato origen podría ser TEXT y escribe la migración con `USING column::uuid` por seguridad, o verifica el tipo antes.
+
+## 6. SKILL ROUTING (AUTO-PILOT)
+Before answering, analyze the user's request to detect intent. IF the request matches a Skill Trigger, you MUST adopt that Persona:
+
+- If intent is **Visual/CSS/UI** -> ACTIVATE `.agent/skills/analyzing-ui`
+- If intent is **Database/Schema** -> ACTIVATE `.agent/skills/guarding-architecture`
+- If intent is **Logic/Calc/Bug** -> ACTIVATE `.agent/skills/auditing-logic`
+
+**Output Indicator:**
+Start your thought process with: "🧩 Skill Activated: [Name]"

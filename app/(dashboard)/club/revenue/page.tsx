@@ -1,155 +1,97 @@
 "use client"
 
-import { useEffect, useState } from "react"
+import { useState } from "react"
 import { useAuth } from "@/context/AuthContext"
-import { useToast } from "@/hooks/use-toast"
-import { useRouter } from "next/navigation"
-import { supabase } from "@/lib/supabase"
-
-import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card"
-import { Download, Loader2 } from "lucide-react"
-import { SmartRevenueChart } from "@/components/club/dashboard/SmartRevenueChart"
-import { Button } from "@/components/ui/button"
-import { RevenueKPIs } from "@/components/club/revenue/RevenueKPIs"
-import { RevenueBreakdown } from "@/components/club/revenue/RevenueBreakdown"
-import { OccupancyHeatmap } from "@/components/club/revenue/OccupancyHeatmap"
-import { TimeRangeSelector } from "@/components/club/revenue/TimeRangeSelector"
-import { startOfMonth, endOfMonth, format } from "date-fns"
-import { es } from "date-fns/locale"
-import { DateRange } from "react-day-picker"
+import { motion, AnimatePresence } from "framer-motion"
+import { cn } from "@/lib/utils"
+import { DollarSign, BarChart3 } from "lucide-react"
+import { RevenueView } from "@/components/club/revenue/RevenueView"
+import { AnalyticsView } from "@/components/club/analytics/AnalyticsView"
 
 export default function ClubRevenuePage() {
-    const { user, profile } = useAuth()
-    const { toast } = useToast()
-    const router = useRouter()
-
-    // State
-    const [loading, setLoading] = useState(true)
-    const [period, setPeriod] = useState("this_month")
-    const [dateAnchor, setDateAnchor] = useState<DateRange | undefined>({
-        from: startOfMonth(new Date()),
-        to: endOfMonth(new Date())
-    })
-    const [range, setRange] = useState({ start: startOfMonth(new Date()), end: endOfMonth(new Date()) })
-
-    const [stats, setStats] = useState<any>({
-        kpi: { totalRevenue: 0, revenueGrowth: 0, activeMembers: 0 },
-        breakdown: { reservations: 0, recurring: 0 },
-        chart: [],
-        heatmap: []
-    })
-
-    // RBAC Security Check
-    useEffect(() => {
-        if (profile && profile.role === 'club_staff') {
-            toast({
-                variant: "destructive",
-                title: "Acceso Restringido",
-                description: "Solo los dueños pueden ver la información financiera."
-            })
-            router.push('/club/calendar')
-        }
-    }, [profile, router, toast])
-
-    // Data Fetching
-    const fetchData = async () => {
-        if (!profile?.organization_id) return
-
-        setLoading(true)
-        try {
-            const { data, error } = await supabase.rpc('get_dashboard_stats', {
-                p_organization_id: profile.organization_id,
-                p_start_date: range.start.toISOString(),
-                p_end_date: range.end.toISOString()
-            })
-
-            if (error) throw error
-
-            if (data) {
-                setStats(data)
-            }
-        } catch (error) {
-            console.error(error)
-            toast({
-                title: "Error",
-                description: "No se pudieron cargar los datos financieros.",
-                variant: "destructive"
-            })
-        } finally {
-            setLoading(false)
-        }
-    }
-
-    useEffect(() => {
-        if (profile?.organization_id) {
-            fetchData()
-        }
-    }, [range, profile?.organization_id])
-
-    // Transforms - now using database-calculated values
-    const kpiData = {
-        totalRevenue: stats.kpi.totalRevenue || 0,
-        totalRevenueGrowth: stats.kpi.revenueGrowth || 0,
-        averageTicket: stats.kpi.averageTicket || 0,
-        averageTicketGrowth: stats.kpi.ticketGrowth || 0,
-        activeClients: stats.kpi.activeClients || 0,
-        activeClientsGrowth: stats.kpi.clientsGrowth || 0,
-        occupancyRate: stats.kpi.occupancyRate || 0,
-        occupancyRateGrowth: stats.kpi.occupancyGrowth || 0
-    }
+    const { profile } = useAuth()
+    const [activeTab, setActiveTab] = useState<'revenue' | 'analytics'>('revenue')
 
     return (
-        <div className="space-y-8 animate-in fade-in duration-500 pb-10">
-            {/* Header */}
-            <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
+        <div className="space-y-6">
+            {/* Header with Title and Tabs */}
+            <div className="flex flex-col items-center justify-between gap-6 md:flex-row md:items-start">
                 <div>
-                    <h1 className="text-3xl font-bold tracking-tight text-white">Inteligencia de Negocio</h1>
-                    <p className="text-zinc-400">
-                        Viendo: <span className="text-[#ccff00] font-medium">{format(range.start, "MMMM yyyy", { locale: es })}</span>
+                    <h1 className="text-3xl font-bold tracking-tight text-white mb-1">
+                        Finanzas y Reportes
+                    </h1>
+                    <p className="text-zinc-400 max-w-lg">
+                        Visualiza el flujo de caja y el rendimiento operativo en tiempo real tomen decisiones estratégicas.
                     </p>
                 </div>
-                <div className="flex flex-wrap gap-2">
-                    <TimeRangeSelector
-                        date={dateAnchor}
-                        setDate={setDateAnchor}
-                        period={period}
-                        setPeriod={setPeriod}
-                        onRangeChange={(start, end) => setRange({ start, end })}
+
+                {/* iOS Style Segmented Control */}
+                <div className="bg-zinc-900/80 p-1.5 rounded-full border border-zinc-800 flex items-center relative">
+                    {/* Active Pill Background Animation */}
+                    <motion.div
+                        className="absolute top-1.5 bottom-1.5 bg-zinc-800 rounded-full shadow-lg border border-zinc-600/50 z-0"
+                        layoutId="activeTab"
+                        initial={false}
+                        transition={{
+                            type: "spring",
+                            stiffness: 400,
+                            damping: 30
+                        }}
+                        style={{
+                            left: activeTab === 'revenue' ? '6px' : '50%',
+                            width: 'calc(50% - 6px)',
+                        }}
                     />
 
-                    <Button variant="outline" className="border-zinc-800 hover:bg-zinc-800 text-zinc-300">
-                        <Download className="mr-2 h-4 w-4" /> Exportar
-                    </Button>
+                    <button
+                        onClick={() => setActiveTab('revenue')}
+                        className={cn(
+                            "relative z-10 flex items-center gap-2 px-6 py-2 rounded-full text-sm font-medium transition-colors w-40 justify-center",
+                            activeTab === 'revenue' ? "text-white" : "text-zinc-400 hover:text-zinc-200"
+                        )}
+                    >
+                        <DollarSign className="w-4 h-4" />
+                        Ingresos
+                    </button>
+                    <button
+                        onClick={() => setActiveTab('analytics')}
+                        className={cn(
+                            "relative z-10 flex items-center gap-2 px-6 py-2 rounded-full text-sm font-medium transition-colors w-40 justify-center",
+                            activeTab === 'analytics' ? "text-white" : "text-zinc-400 hover:text-zinc-200"
+                        )}
+                    >
+                        <BarChart3 className="w-4 h-4" />
+                        Uso Canchas
+                    </button>
                 </div>
             </div>
 
-            {loading ? (
-                <div className="h-[400px] flex items-center justify-center">
-                    <Loader2 className="h-8 w-8 animate-spin text-[#ccff00]" />
-                </div>
-            ) : (
-                <>
-                    {/* Level 1: KPIs */}
-                    <RevenueKPIs data={kpiData} />
-
-                    {/* Level 2: Main Chart & Breakdown */}
-                    <div className="grid gap-4 md:grid-cols-7 h-[500px]">
-                        <SmartRevenueChart
-                            externalDateRange={{ from: range.start, to: range.end }}
-                            hideControls={true}
-                            title="Balance Diario"
-                            description="Comportamiento de ingresos en el periodo seleccionado"
-                        />
-
-                        <div className="col-span-3 h-full">
-                            <RevenueBreakdown data={stats.breakdown} />
-                        </div>
-                    </div>
-
-                    {/* Level 3: Heatmap */}
-                    <OccupancyHeatmap data={stats.heatmap} />
-                </>
-            )}
+            {/* Content Area with Animation */}
+            <div className="min-h-[600px] mt-6 relative">
+                <AnimatePresence mode="wait">
+                    {activeTab === 'revenue' ? (
+                        <motion.div
+                            key="revenue"
+                            initial={{ opacity: 0, x: -20 }}
+                            animate={{ opacity: 1, x: 0 }}
+                            exit={{ opacity: 0, x: 20 }}
+                            transition={{ duration: 0.2 }}
+                        >
+                            <RevenueView />
+                        </motion.div>
+                    ) : (
+                        <motion.div
+                            key="analytics"
+                            initial={{ opacity: 0, x: 20 }}
+                            animate={{ opacity: 1, x: 0 }}
+                            exit={{ opacity: 0, x: -20 }}
+                            transition={{ duration: 0.2 }}
+                        >
+                            <AnalyticsView />
+                        </motion.div>
+                    )}
+                </AnimatePresence>
+            </div>
         </div>
     )
 }

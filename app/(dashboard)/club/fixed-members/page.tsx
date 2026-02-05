@@ -16,7 +16,8 @@ import {
 import { Badge } from "@/components/ui/badge"
 import { Checkbox } from "@/components/ui/checkbox"
 import { useToast } from "@/hooks/use-toast"
-import { Loader2, Plus, Calendar, Umbrella, MoreHorizontal, FileText, CheckCircle2, AlertTriangle, X, Banknote, Pencil, Save, CreditCard, MapPin, Clock } from "lucide-react"
+import { Loader2, Plus, Calendar, Umbrella, MoreHorizontal, FileText, CheckCircle2, AlertTriangle, X, Banknote, Pencil, Save, CreditCard, MapPin, Clock, Search, Check, UserPlus } from "lucide-react"
+import { createClubMember } from "@/app/actions/crm"
 import { format, parseISO, addWeeks, addMinutes, isBefore, isAfter, startOfDay, endOfMonth, startOfMonth } from "date-fns"
 import { es } from "date-fns/locale"
 import {
@@ -55,12 +56,16 @@ interface RecurringPlan {
     active: boolean
     payment_advance?: boolean
     remaining_sessions?: number
+    member_id?: string | null
+    member?: { full_name: string; email?: string; phone?: string } | null
 }
 
 interface UserSummary {
     id: string
+    user_id?: string | null
     full_name: string
-    email: string
+    email?: string | null
+    phone?: string | null
 }
 
 const DAYS = ['Domingo', 'Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado']
@@ -72,7 +77,13 @@ export default function FixedMembersPage() {
     const [loading, setLoading] = useState(true)
     const [courtsMap, setCourtsMap] = useState<Record<string, string>>({})
     const [orgUsers, setOrgUsers] = useState<UserSummary[]>([])
+    const [clubMembers, setClubMembers] = useState<UserSummary[]>([])
     const [courtsList, setCourtsList] = useState<any[]>([])
+
+    // Search State
+    const [searchQuery, setSearchQuery] = useState("")
+    const [memberOpen, setMemberOpen] = useState(false)
+    const [selectedMember, setSelectedMember] = useState<UserSummary | null>(null)
 
     // Constants
     const TIME_SLOTS = [
@@ -107,6 +118,8 @@ export default function FixedMembersPage() {
     })
 
     const [formData, setFormData] = useState({
+        clubMemberId: '',
+        memberId: '',
         userId: '',
         courtId: '',
         dayOfWeek: '1',
@@ -138,6 +151,27 @@ export default function FixedMembersPage() {
         }
     }, [viewingPlan])
 
+    // Auto-calculate Start Date when Day changes (Smart Snap)
+    useEffect(() => {
+        const targetDay = parseInt(formData.dayOfWeek)
+        // Find next occurrence
+        let current = new Date()
+        // If today is the target day, we can start today, or next week? Usually today is fine if hour > now.
+        // But simply logic: Keep iterating until getDay() === targetDay
+        while (current.getDay() !== targetDay) {
+            current.setDate(current.getDate() + 1)
+        }
+
+        // Update start date to this calculated snap
+        // Only if it's different to avoid loops, though strict equality check handles it.
+        // Also we only want to do this if the user hasn't manually picked a far future date?
+        // Let's assume if he changes Day of Week, he expects the date to realign.
+        setFormData(prev => ({
+            ...prev,
+            startDate: format(current, 'yyyy-MM-dd')
+        }))
+    }, [formData.dayOfWeek])
+
     // Auto-calculate End Date
     useEffect(() => {
         let weeks = 0
@@ -162,6 +196,17 @@ export default function FixedMembersPage() {
 
         setLoading(true)
         try {
+            // 0. VAMPIRE HUNTER: Auto-deactivate expired plans
+            const todayISO = new Date().toISOString().split('T')[0]
+            const { error: vampireError } = await supabase
+                .from('recurring_plans')
+                .update({ active: false })
+                .eq('organization_id', orgId)
+                .eq('active', true)
+                .lt('end_date', todayISO)
+
+            if (vampireError) console.error("Vampire Hunter failed:", vampireError)
+
             // 1. Fetch Courts (All)
             const { data: courtsData, error: courtsError } = await supabase
                 .from('courts')
@@ -186,6 +231,15 @@ export default function FixedMembersPage() {
             if (usersError) console.error("Error fetching users:", usersError)
             setOrgUsers(usersData || [])
 
+            // 2b. Fetch Club Members (CRM)
+            const { data: membersData, error: membersError } = await supabase
+                .from('club_members')
+                .select('id, user_id, full_name, email, phone')
+                .eq('entity_id', orgId)
+
+            if (membersError) console.error("Error fetching members:", membersError)
+            setClubMembers(membersData || [])
+
             // 3. Fetch Plans
             await reloadPlans()
 
@@ -200,7 +254,7 @@ export default function FixedMembersPage() {
     const reloadPlans = async () => {
         const { data: plansData, error: plansError } = await supabase
             .from('recurring_plans')
-            .select(`*, user:users(full_name, email, phone)`)
+            .select(`*, user:users(full_name, email, phone), member:club_members(full_name, email, phone)`)
             .eq('organization_id', orgId)
             .eq('active', true)
             .order('created_at', { ascending: false })
@@ -212,13 +266,15 @@ export default function FixedMembersPage() {
             let counts: Record<string, number> = {}
 
             if (planIds.length > 0) {
-                const { data: bookingCounts } = await supabase
+                // Count FUTURE bookings (Real Remaining)
+                const { data: futureCounts } = await supabase
                     .from('bookings')
                     .select('recurring_plan_id')
                     .in('recurring_plan_id', planIds)
                     .gte('start_time', now)
+                    .neq('payment_status', 'canceled') // Don't count canceled
 
-                bookingCounts?.forEach((b: any) => {
+                futureCounts?.forEach((b: any) => {
                     if (b.recurring_plan_id) counts[b.recurring_plan_id] = (counts[b.recurring_plan_id] || 0) + 1
                 })
             }
@@ -351,8 +407,8 @@ export default function FixedMembersPage() {
     // --- CREATE LOGIC ---
 
     const handleCreatePlan = async () => {
-        if (!formData.userId || !formData.courtId) {
-            toast({ title: "Faltan datos", description: "Selecciona usuario y cancha", variant: "destructive" })
+        if ((!formData.userId && !formData.memberId) || !formData.courtId) {
+            toast({ title: "Faltan datos", description: "Selecciona usuario/socio y cancha", variant: "destructive" })
             return
         }
 
@@ -422,14 +478,14 @@ export default function FixedMembersPage() {
                 .from('recurring_plans')
                 .insert({
                     organization_id: orgId,
-                    user_id: formData.userId,
+                    user_id: formData.userId || null,
+                    member_id: formData.memberId || null,
                     court_id: formData.courtId,
                     day_of_week: parseInt(formData.dayOfWeek),
                     start_time: formData.startTime + ':00',
                     start_date: formData.startDate,
                     end_date: formData.endDate,
                     total_price: parseFloat(formData.price),
-                    price: parseFloat(formData.price),
                     active: true,
                     payment_advance: formData.advancePayment
                 })
@@ -444,10 +500,10 @@ export default function FixedMembersPage() {
             const bookingsToInsert = slots.map(slot => ({
                 entity_id: orgId,
                 court_id: formData.courtId,
-                user_id: formData.userId,
+                user_id: formData.userId || null,
                 start_time: slot.start,
                 end_time: slot.end,
-                title: selectedUser?.full_name || 'Reserva Fija',
+                title: selectedUser?.full_name || selectedMember?.full_name || 'Reserva Fija',
                 payment_status: formData.advancePayment ? 'paid' : 'pending',
                 recurring_plan_id: plan.id,
             }))
@@ -502,20 +558,106 @@ export default function FixedMembersPage() {
                                     <div className="grid gap-4 py-4">
 
                                         {/* User & Court Row */}
+                                        {/* User & Court Row */}
                                         <div className="grid grid-cols-2 gap-4">
-                                            <div className="grid gap-2">
+                                            {/* Native Smart Search (Crash Proof) */}
+                                            <div className="flex flex-col gap-2 relative">
                                                 <Label>Socio</Label>
-                                                <Select onValueChange={(v) => setFormData({ ...formData, userId: v })}>
-                                                    <SelectTrigger className="bg-zinc-900 border-zinc-700">
-                                                        <SelectValue placeholder="Socio..." />
-                                                    </SelectTrigger>
-                                                    <SelectContent className="bg-zinc-900 border-zinc-700 text-white">
-                                                        {orgUsers.map(u => (
-                                                            <SelectItem key={u.id} value={u.id}>{u.full_name}</SelectItem>
-                                                        ))}
-                                                    </SelectContent>
-                                                </Select>
+                                                <div className="relative">
+                                                    <div className="flex items-center border border-zinc-700 rounded-md bg-zinc-900 focus-within:ring-2 focus-within:ring-blue-600">
+                                                        <Search className="h-4 w-4 ml-3 text-zinc-500" />
+                                                        <input
+                                                            type="text"
+                                                            placeholder="Nombre o teléfono..."
+                                                            className="flex-1 bg-transparent border-none text-white p-2 placeholder:text-zinc-500 focus:outline-none text-sm"
+                                                            value={searchQuery}
+                                                            onChange={(e) => {
+                                                                setSearchQuery(e.target.value)
+                                                                if (!memberOpen) setMemberOpen(true)
+                                                            }}
+                                                            onFocus={() => setMemberOpen(true)}
+                                                        />
+                                                        {selectedMember && (
+                                                            <button
+                                                                onClick={() => {
+                                                                    setSelectedMember(null)
+                                                                    setSearchQuery('')
+                                                                    setFormData(prev => ({ ...prev, memberId: '', userId: '' }))
+                                                                }}
+                                                                className="mr-2 text-zinc-500 hover:text-white"
+                                                            >
+                                                                <X className="h-4 w-4" />
+                                                            </button>
+                                                        )}
+                                                    </div>
+
+                                                    {/* Dropdown Results */}
+                                                    {memberOpen && searchQuery.length > 0 && (
+                                                        <div className="absolute top-full left-0 right-0 mt-1 bg-zinc-900 border border-zinc-700 rounded-md shadow-xl z-50 max-h-[200px] overflow-y-auto">
+                                                            {(clubMembers || [])
+                                                                .filter(m =>
+                                                                    (m.full_name || '').toLowerCase().includes(searchQuery.toLowerCase()) ||
+                                                                    (m.phone || '').includes(searchQuery)
+                                                                )
+                                                                .slice(0, 10)
+                                                                .map((member) => (
+                                                                    <div
+                                                                        key={member.id}
+                                                                        onClick={() => {
+                                                                            setSelectedMember(member)
+                                                                            setSearchQuery(member.full_name)
+                                                                            setFormData(prev => ({
+                                                                                ...prev,
+                                                                                clubMemberId: member.id,
+                                                                                memberId: member.id, // Ensure compatibility
+                                                                                userId: member.user_id || ''
+                                                                            }))
+                                                                            setMemberOpen(false)
+                                                                        }}
+                                                                        className="flex items-center justify-between p-2 hover:bg-zinc-800 cursor-pointer text-sm text-zinc-200"
+                                                                    >
+                                                                        <div className="flex flex-col">
+                                                                            <span className="font-medium">{member.full_name}</span>
+                                                                            {member.phone && <span className="text-xs text-zinc-500">{member.phone}</span>}
+                                                                        </div>
+                                                                        {selectedMember?.id === member.id && <Check className="h-4 w-4 text-emerald-500" />}
+                                                                    </div>
+                                                                ))}
+
+                                                            {/* Empty State / Create Action */}
+                                                            {clubMembers && clubMembers.filter(m => (m.full_name || '').toLowerCase().includes(searchQuery.toLowerCase())).length === 0 && (
+                                                                <div className="p-2">
+                                                                    <p className="text-xs text-zinc-500 mb-2 px-2">No encontrado en el CRM.</p>
+                                                                    <button
+                                                                        onClick={async () => {
+                                                                            try {
+                                                                                const newMember = await createClubMember(orgId!, searchQuery)
+                                                                                // Convert to UserSummary format
+                                                                                const summary: UserSummary = {
+                                                                                    ...newMember,
+                                                                                }
+                                                                                setClubMembers(prev => [...prev, summary])
+                                                                                setSelectedMember(summary)
+                                                                                setSearchQuery(summary.full_name)
+                                                                                setFormData(prev => ({ ...prev, memberId: summary.id, userId: summary.user_id || '' }))
+                                                                                setMemberOpen(false)
+                                                                                toast({ title: "Cliente Creado", description: `${summary.full_name} añadido.` })
+                                                                            } catch (err: any) {
+                                                                                toast({ title: "Error", description: err.message, variant: "destructive" })
+                                                                            }
+                                                                        }}
+                                                                        className="w-full flex items-center justify-center gap-2 p-2 bg-[#ccff00] text-black rounded font-medium hover:bg-[#b3e600] transition-colors"
+                                                                    >
+                                                                        <UserPlus className="h-4 w-4" />
+                                                                        Crear "{searchQuery}"
+                                                                    </button>
+                                                                </div>
+                                                            )}
+                                                        </div>
+                                                    )}
+                                                </div>
                                             </div>
+
                                             <div className="grid gap-2">
                                                 <Label>Cancha</Label>
                                                 <Select onValueChange={(v) => setFormData({ ...formData, courtId: v })}>
@@ -671,8 +813,8 @@ export default function FixedMembersPage() {
                                 <TableRow key={plan.id} className="border-zinc-800 hover:bg-zinc-800/50">
                                     <TableCell>
                                         <div className="flex flex-col">
-                                            <span className="font-medium text-white">{plan.user?.full_name || 'Sin nombre'}</span>
-                                            <span className="text-xs text-zinc-500">{plan.user?.phone || plan.user?.email}</span>
+                                            <span className="font-medium text-white">{plan.user?.full_name || plan.member?.full_name || 'Sin nombre'}</span>
+                                            <span className="text-xs text-zinc-500">{plan.user?.phone || plan.member?.phone || plan.user?.email}</span>
                                         </div>
                                     </TableCell>
                                     <TableCell className="text-zinc-300">
@@ -690,13 +832,16 @@ export default function FixedMembersPage() {
                                         {format(parseISO(plan.end_date), "d 'de' MMM, yyyy", { locale: es })}
                                     </TableCell>
                                     <TableCell className="text-center">
-                                        <Badge variant="outline" className={
-                                            (plan.remaining_sessions || 0) < 4
-                                                ? "bg-red-500/10 text-red-400 border-red-500/20"
-                                                : "bg-emerald-500/10 text-emerald-400 border-emerald-500/20"
-                                        }>
-                                            {plan.remaining_sessions} restantes
-                                        </Badge>
+                                        <div className="flex flex-col items-center">
+                                            <Badge variant="outline" className={
+                                                (plan.remaining_sessions || 0) < 4
+                                                    ? "bg-red-500/10 text-red-400 border-red-500/20"
+                                                    : "bg-emerald-500/10 text-emerald-400 border-emerald-500/20"
+                                            }>
+                                                {plan.remaining_sessions} pendientes
+                                            </Badge>
+                                            <span className="text-[10px] text-zinc-500 mt-1">Por jugar</span>
+                                        </div>
                                     </TableCell>
                                     <TableCell className="text-right">
                                         <DropdownMenu>

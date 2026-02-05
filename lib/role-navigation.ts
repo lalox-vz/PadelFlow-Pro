@@ -1,10 +1,16 @@
 export type UserRole = 'owner' | 'club_owner' | 'academy_owner' | 'coach' | 'student' | 'player' | 'client' | 'admin' | 'super_admin' | string | undefined | null
 
-export function getDashboardRoute(role: UserRole): string {
+export function getDashboardRoute(role: UserRole, onboardingStatus: string = 'completed'): string {
     if (!role) return '/'
 
     // Normalize role
     const r = role.toLowerCase()
+
+    // NEW: Onboarding Fork (Bridge)
+    // If onboarding is strictly 'not_started', force Welcome flow regardless of role (unless admin)
+    if (onboardingStatus === 'not_started' && r !== 'admin' && r !== 'super_admin') {
+        return '/welcome'
+    }
 
     if (r === 'owner' || r === 'club_owner') return '/club/dashboard'
     if (r === 'club_staff') return '/club/calendar' // Redirect Staff directly to Calendar

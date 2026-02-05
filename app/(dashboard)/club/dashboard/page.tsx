@@ -3,7 +3,7 @@
 import { useAuth } from "@/context/AuthContext"
 import { useWorkspace } from "@/context/WorkspaceContext"
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card"
-import { DollarSign, Users, Activity, CreditCard, Calendar, Loader2, ChevronRight, Clock, MapPin, User, CheckCircle2, Search, Filter, MessageCircle, CheckSquare, X } from "lucide-react"
+import { DollarSign, Users, Activity, CreditCard, Calendar, Loader2, ChevronRight, Clock, MapPin, User, CheckCircle2, Search, Filter, MessageCircle, CheckSquare, X, AlertCircle, Phone } from "lucide-react"
 import { ClubHostingRequests } from "@/components/club/ClubHostingRequests"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -35,6 +35,7 @@ interface PendingBooking {
     court: { name: string } | null
     user: { full_name: string, phone: string } | null
     original_title?: string
+    metadata?: any
 }
 
 interface ActiveClient {
@@ -67,6 +68,7 @@ export default function ClubDashboardPage() {
 
     // Pending Payments State
     const [pendingPaymentsCount, setPendingPaymentsCount] = useState(0)
+    const [pendingAmount, setPendingAmount] = useState(0)
     const [pendingBookings, setPendingBookings] = useState<PendingBooking[]>([])
     const [sheetOpen, setSheetOpen] = useState(false)
 
@@ -93,6 +95,28 @@ export default function ClubDashboardPage() {
         }
     }, [profile, router])
 
+
+    // Entity Status State
+    const [entityStatus, setEntityStatus] = useState<'verified' | 'pending' | 'rejected' | null>(null)
+
+    // Fetch Entity Status
+    useEffect(() => {
+        async function checkStatus() {
+            if (!profile?.organization_id) return
+
+            const { data, error } = await supabase
+                .from('entities')
+                .select('verification_status')
+                .eq('id', profile.organization_id)
+                .single()
+
+            if (data) {
+                setEntityStatus(data.verification_status)
+            }
+        }
+        checkStatus()
+    }, [profile?.organization_id])
+
     const fetchPendingPayments = useCallback(async () => {
         if (!profile?.organization_id) return
 
@@ -109,7 +133,10 @@ export default function ClubDashboardPage() {
                     price,
                     court_id,
                     user_id,
-                    title
+                    court_id,
+                    user_id,
+                    title,
+                    metadata
                 `, { count: 'exact' })
                 .eq('entity_id', profile.organization_id)
                 .eq('payment_status', 'pending')
@@ -193,7 +220,8 @@ export default function ClubDashboardPage() {
                             phone: user?.phone || ''
                         },
                         // We store the original title just in case
-                        original_title: b.title
+                        original_title: b.title,
+                        metadata: b.metadata
                     }
                 })
 
@@ -209,14 +237,18 @@ export default function ClubDashboardPage() {
 
             setPendingBookings(finalBookings)
 
-            // 6. Fetch Global Counter (Badge)
-            const { count: totalCount } = await supabase
+            // 6. Fetch Global Counter (Badge) & Total Amount
+            const { data: allPendingStats } = await supabase
                 .from('bookings')
-                .select('id', { count: 'exact', head: true })
+                .select('price')
                 .eq('entity_id', profile.organization_id)
                 .eq('payment_status', 'pending')
 
-            setPendingPaymentsCount(totalCount || 0)
+            const totalCount = allPendingStats?.length || 0
+            const totalAmount = allPendingStats?.reduce((sum, b) => sum + (b.price || 0), 0) || 0
+
+            setPendingPaymentsCount(totalCount)
+            setPendingAmount(totalAmount)
 
         } catch (error) {
             console.error('Error fetching pending payments:', error)
@@ -336,10 +368,10 @@ export default function ClubDashboardPage() {
                 end = endDay.toISOString()
             }
 
-            // 1. Fetch Paid Bookings
+            // 1. Fetch Paid Bookings (Expanded selection)
             const { data: bookings } = await supabase
                 .from('bookings')
-                .select('user_id, price, start_time')
+                .select('user_id, price, start_time, title') // Added title for manual
                 .eq('entity_id', profile.organization_id)
                 .in('payment_status', ['paid', 'approved', 'completed'])
                 .gte('start_time', start)
@@ -350,48 +382,87 @@ export default function ClubDashboardPage() {
                 return
             }
 
-            // 2. Aggregate Data
-            const userStats: Record<string, { count: number, spent: number, lastDate: string }> = {}
-            const userIds = new Set<string>()
+            // 2. Aggregate Data (Hybrid Map: userId OR title)
+            // Key: userId (if exists) OR "manual_TITLE"
+            const clientStats: Record<string, {
+                count: number,
+                spent: number,
+                lastDate: string,
+                userId: string | null,
+                name: string
+            }> = {}
+
+            const realUserIds = new Set<string>()
 
             bookings.forEach((b: any) => {
-                if (!b.user_id) return
-                userIds.add(b.user_id)
+                let key = ''
+                let name = ''
+                let userId = null
 
-                if (!userStats[b.user_id]) {
-                    userStats[b.user_id] = { count: 0, spent: 0, lastDate: b.start_time }
+                if (b.user_id) {
+                    key = `user_${b.user_id}`
+                    userId = b.user_id
+                    realUserIds.add(b.user_id)
+                } else if (b.title) {
+                    key = `manual_${b.title.trim().toLowerCase()}`
+                    name = b.title.trim() // Initial name, might vary slightly but grouping by lowercase key
+                } else {
+                    return // Skip unknown
                 }
 
-                userStats[b.user_id].count += 1
-                userStats[b.user_id].spent += (b.price || 0)
+                if (!clientStats[key]) {
+                    clientStats[key] = {
+                        count: 0,
+                        spent: 0,
+                        lastDate: b.start_time,
+                        userId: userId,
+                        name: name
+                    }
+                }
 
-                if (b.start_time > userStats[b.user_id].lastDate) {
-                    userStats[b.user_id].lastDate = b.start_time
+                clientStats[key].count += 1
+                clientStats[key].spent += (b.price || 0)
+
+                // Keep the properly capitalized name if we found it
+                if (name && name.length > clientStats[key].name.length) {
+                    clientStats[key].name = name
+                }
+
+                if (b.start_time > clientStats[key].lastDate) {
+                    clientStats[key].lastDate = b.start_time
                 }
             })
 
-            // 3. Fetch User Details
+            // 3. Fetch Real User Details
             let usersMap: Record<string, any> = {}
-            if (userIds.size > 0) {
+            if (realUserIds.size > 0) {
                 const { data: usersData } = await supabase
                     .from('users')
                     .select('id, full_name, phone')
-                    .in('id', Array.from(userIds))
+                    .in('id', Array.from(realUserIds))
 
                 if (usersData) {
                     usersData.forEach((u: any) => { usersMap[u.id] = u })
                 }
             }
 
-            // 4. Merge
-            let clients: ActiveClient[] = Array.from(userIds).map(uid => {
-                const user = usersMap[uid]
-                const stats = userStats[uid]
+            // 4. Merge & Finalize List
+            let clients: ActiveClient[] = Object.values(clientStats).map(stat => {
+                let displayName = stat.name || 'Cliente'
+                let displayPhone = ''
+
+                if (stat.userId && usersMap[stat.userId]) {
+                    displayName = usersMap[stat.userId].full_name
+                    displayPhone = usersMap[stat.userId].phone
+                }
+
                 return {
-                    id: uid,
-                    full_name: user?.full_name || 'Cliente',
-                    phone: user?.phone || '',
-                    ...stats
+                    id: stat.userId || `temp_${stat.name}`, // stable id for list
+                    full_name: displayName,
+                    phone: displayPhone,
+                    count: stat.count,
+                    spent: stat.spent,
+                    lastDate: stat.lastDate
                 }
             })
 
@@ -400,7 +471,7 @@ export default function ClubDashboardPage() {
                 const lower = activeClientsSearch.toLowerCase()
                 clients = clients.filter(c =>
                     c.full_name.toLowerCase().includes(lower) ||
-                    c.phone.includes(lower)
+                    (c.phone && c.phone.includes(lower))
                 )
             }
 
@@ -416,12 +487,12 @@ export default function ClubDashboardPage() {
         }
     }, [profile?.organization_id, activeClientsSearch, activeClientsDateFilter])
 
-    // Load Active Clients when sheet opens
+    // Load Active Clients (Always load for TopSpenders widget)
     useEffect(() => {
-        if (activeClientsSheetOpen) {
+        if (profile?.organization_id) {
             fetchActiveClients()
         }
-    }, [activeClientsSheetOpen, fetchActiveClients])
+    }, [profile?.organization_id, fetchActiveClients])
 
     const formatCurrency = (value: number) => {
         return new Intl.NumberFormat('es-VE', { style: 'currency', currency: 'USD' }).format(value)
@@ -514,371 +585,305 @@ export default function ClubDashboardPage() {
 
     if (loading) {
         return (
-            <div className="h-[400px] flex items-center justify-center">
+            <div className="flex bg-zinc-950 h-screen w-full items-center justify-center">
                 <Loader2 className="h-8 w-8 animate-spin text-[#ccff00]" />
             </div>
         )
     }
 
     return (
-        <div className="space-y-8 animate-in fade-in duration-500">
-            <div>
-                <h1 className="text-3xl font-bold tracking-tight text-foreground">Panel del Club</h1>
-                <p className="text-muted-foreground">
-                    Bienvenido de vuelta, {user?.user_metadata?.full_name || 'Owner'}.
-                    Resumen de {format(new Date(), 'MMMM yyyy', { locale: es })}.
-                </p>
-            </div>
+        <div className="flex flex-col space-y-6">
+            {/* Trust & Safety Banners */}
+            {entityStatus === 'pending' && (
+                <div className="bg-amber-500/10 border border-amber-500/20 text-amber-500 p-4 rounded-lg flex items-start gap-3">
+                    <Activity className="h-5 w-5 mt-0.5 shrink-0" />
+                    <div>
+                        <h3 className="font-semibold text-sm">Tu club está en proceso de verificación (Privado)</h3>
+                        <p className="text-xs mt-1 text-amber-500/80">
+                            Por razones de seguridad, tu club iniciará como privado y no aparecerá en búsquedas.
+                            Nuestro equipo revisará tu cuenta en menos de 24 horas. Mientras tanto, puedes configurar tus canchas y horarios.
+                        </p>
+                    </div>
+                </div>
+            )}
 
-            <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
-                {/* Pending Payments Alert */}
-                <Sheet open={sheetOpen} onOpenChange={setSheetOpen}>
-                    <SheetTrigger asChild>
-                        <Card className={`border-l-4 shadow-md cursor-pointer transition-all hover:bg-accent group ${pendingPaymentsCount > 0 ? 'border-l-red-500' : 'border-l-emerald-500'}`}>
-                            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                                <CardTitle className={`text-sm font-medium ${pendingPaymentsCount > 0 ? 'text-red-600' : 'text-emerald-600'}`}>
-                                    Pagos Pendientes
-                                </CardTitle>
-                                <CreditCard className={`h-4 w-4 ${pendingPaymentsCount > 0 ? 'text-red-500' : 'text-emerald-500'}`} />
-                            </CardHeader>
-                            <CardContent>
-                                <div className="flex items-center justify-between">
-                                    <div>
-                                        <div className={`text-2xl font-bold ${pendingPaymentsCount > 0 ? 'text-red-600' : 'text-emerald-600'}`}>
-                                            {pendingPaymentsCount}
+            {entityStatus === 'rejected' && (
+                <div className="bg-red-500/10 border border-red-500/20 text-red-500 p-4 rounded-lg flex items-start gap-3">
+                    <AlertCircle className="h-5 w-5 mt-0.5 shrink-0" />
+                    <div>
+                        <h3 className="font-semibold text-sm">Verificación Denegada</h3>
+                        <p className="text-xs mt-1 text-red-500/80">
+                            Hubo un problema verificando tu club. Por favor contacta a soporte para resolver esto.
+                        </p>
+                    </div>
+                </div>
+            )}
+
+            <div className="flex flex-col md:flex-row gap-4 md:items-center justify-between">
+                <div>
+                    <h2 className="text-3xl font-bold tracking-tight text-white mb-1">
+                        Hola, {profile?.full_name?.split(' ')[0]} 👋
+                    </h2>
+                    <p className="text-zinc-400">Resumen de actividad de tu club</p>
+                </div>
+
+                <div className="flex gap-2">
+                    {/* TOP ACTION ALERT: PENDING PAYMENTS */}
+                    <Sheet open={sheetOpen} onOpenChange={setSheetOpen}>
+                        <SheetTrigger asChild>
+                            <Button
+                                className={`relative h-12 px-6 rounded-xl font-bold transition-all duration-300 ${pendingPaymentsCount > 0
+                                    ? "bg-red-500 hover:bg-red-600 text-white shadow-[0_0_20px_rgba(239,68,68,0.4)] animate-pulse-3"
+                                    : "bg-zinc-900 border border-zinc-800 text-zinc-400 hover:text-white"
+                                    }`}
+                            >
+                                {pendingPaymentsCount > 0 ? (
+                                    <div className="flex items-center gap-2">
+                                        <AlertCircle className="w-5 h-5" />
+                                        <div className="flex flex-col items-start sr-only md:not-sr-only leading-none">
+                                            <span className="text-[10px] uppercase opacity-80">Por Cobrar</span>
+                                            <span className="text-base">{formatCurrency(pendingAmount)}</span>
                                         </div>
-                                        <p className="text-xs text-muted-foreground">
-                                            {pendingPaymentsCount > 0 ? 'Requieren atención' : 'Todo al día'}
-                                        </p>
+                                        <span className="md:hidden">
+                                            {formatCurrency(pendingAmount)}
+                                        </span>
                                     </div>
-                                    <ChevronRight className={`h-5 w-5 opacity-0 group-hover:opacity-100 transition-opacity ${pendingPaymentsCount > 0 ? 'text-red-500' : 'text-emerald-500'}`} />
-                                </div>
-                            </CardContent>
-                        </Card>
-                    </SheetTrigger>
-                    <SheetContent className="bg-zinc-950 border-zinc-800 w-[400px] sm:w-[600px] flex flex-col h-full">
-                        <SheetHeader className="pb-4 border-b border-zinc-800">
-                            <SheetTitle className="text-white flex items-center gap-2">
-                                <CreditCard className={`h-5 w-5 ${pendingPaymentsCount > 0 ? 'text-red-500' : 'text-emerald-500'}`} />
-                                Pagos Pendientes ({pendingPaymentsCount})
-                            </SheetTitle>
-                            <SheetDescription className="text-zinc-400">
-                                Gestiona los cobros pendientes de tus reservas.
-                            </SheetDescription>
-                        </SheetHeader>
+                                ) : (
+                                    <div className="flex items-center gap-2">
+                                        <CheckCircle2 className="w-5 h-5 text-emerald-500" />
+                                        <span>Todo al día</span>
+                                    </div>
+                                )}
+                            </Button>
+                        </SheetTrigger>
+                        <SheetContent className="bg-zinc-950 border-zinc-800 w-[400px] sm:w-[600px] flex flex-col h-full">
+                            <SheetHeader className="pb-4 border-b border-zinc-800">
+                                <SheetTitle className="text-white flex items-center gap-2">
+                                    <CreditCard className={`h-5 w-5 ${pendingPaymentsCount > 0 ? 'text-red-500' : 'text-emerald-500'}`} />
+                                    Pagos Pendientes ({pendingPaymentsCount})
+                                </SheetTitle>
+                                <SheetDescription className="text-zinc-400">
+                                    Gestiona los cobros pendientes de tus reservas.
+                                </SheetDescription>
+                            </SheetHeader>
 
-                        {/* Controls Section */}
-                        <div className="py-4 space-y-4">
-                            <div className="flex gap-2">
-                                <div className="relative flex-1">
-                                    <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
+                            {/* Controls Section */}
+                            <div className="py-4 space-y-4">
+                                <div className="flex gap-2">
+                                    <div className="relative flex-1">
+                                        <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
+                                        <Input
+                                            placeholder="Buscar cliente..."
+                                            className="pl-9 bg-zinc-900 border-zinc-700"
+                                            value={searchQuery}
+                                            onChange={(e) => setSearchQuery(e.target.value)}
+                                        />
+                                    </div>
                                     <Input
-                                        placeholder="Buscar cliente..."
-                                        className="pl-9 bg-zinc-900 border-zinc-700"
-                                        value={searchQuery}
-                                        onChange={(e) => setSearchQuery(e.target.value)}
+                                        type="date"
+                                        className="w-[140px] bg-zinc-900 border-zinc-700"
+                                        value={dateFilter}
+                                        onChange={(e) => setDateFilter(e.target.value)}
                                     />
                                 </div>
-                                <Input
-                                    type="date"
-                                    className="w-[140px] bg-zinc-900 border-zinc-700"
-                                    value={dateFilter}
-                                    onChange={(e) => setDateFilter(e.target.value)}
-                                />
+
+                                {/* Bulk Actions Bar */}
+                                {selectedIds.size > 0 && (
+                                    <div className="flex items-center justify-between bg-zinc-900 p-2 rounded-md border border-zinc-800 animate-in fade-in slide-in-from-top-2">
+                                        <span className="text-sm text-zinc-300 ml-2">
+                                            {selectedIds.size} seleccionados
+                                        </span>
+                                        <Button
+                                            size="sm"
+                                            onClick={handleBulkMarkAsPaid}
+                                            className="bg-emerald-600 hover:bg-emerald-700 text-white"
+                                        >
+                                            Marcar Pagados
+                                        </Button>
+                                    </div>
+                                )}
+
+                                {/* Select All */}
+                                <div className="flex items-center space-x-2 px-1">
+                                    <Checkbox
+                                        id="select-all"
+                                        checked={pendingBookings.length > 0 && selectedIds.size === pendingBookings.length}
+                                        onCheckedChange={(checked) => handleSelectAll(checked as boolean)}
+                                    />
+                                    <label
+                                        htmlFor="select-all"
+                                        className="text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70 text-zinc-400"
+                                    >
+                                        Seleccionar todos los visibles
+                                    </label>
+                                </div>
                             </div>
 
-                            {/* Bulk Actions Bar */}
-                            {selectedIds.size > 0 && (
-                                <div className="flex items-center justify-between bg-zinc-900 p-2 rounded-md border border-zinc-800 animate-in fade-in slide-in-from-top-2">
-                                    <span className="text-sm text-zinc-300 ml-2">
-                                        {selectedIds.size} seleccionados
-                                    </span>
-                                    <Button
-                                        size="sm"
-                                        onClick={handleBulkMarkAsPaid}
-                                        className="bg-emerald-600 hover:bg-emerald-700 text-white"
-                                    >
-                                        Marcar Pagados
-                                    </Button>
-                                </div>
-                            )}
-
-                            {/* Select All */}
-                            <div className="flex items-center space-x-2 px-1">
-                                <Checkbox
-                                    id="select-all"
-                                    checked={pendingBookings.length > 0 && selectedIds.size === pendingBookings.length}
-                                    onCheckedChange={(checked) => handleSelectAll(checked as boolean)}
-                                />
-                                <label
-                                    htmlFor="select-all"
-                                    className="text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70 text-zinc-400"
-                                >
-                                    Seleccionar todos los visibles
-                                </label>
-                            </div>
-                        </div>
-
-                        {/* List */}
-                        <div className="flex-1 overflow-y-auto pr-2 space-y-3 -mr-2">
-                            {loadingPending && pendingBookings.length === 0 ? (
-                                <div className="flex justify-center items-center h-32">
-                                    <Loader2 className="h-6 w-6 animate-spin text-zinc-500" />
-                                </div>
-                            ) : pendingBookings.length > 0 ? (
-                                pendingBookings.map((booking) => (
-                                    <div
-                                        key={booking.id}
-                                        className={`p-3 rounded-lg border transition-colors ${selectedIds.has(booking.id) ? 'bg-zinc-800/50 border-emerald-500/30' : 'bg-zinc-900 border-zinc-800 hover:border-zinc-700'}`}
-                                    >
-                                        <div className="flex items-start gap-3">
-                                            <div className="pt-1">
-                                                <Checkbox
-                                                    checked={selectedIds.has(booking.id)}
-                                                    onCheckedChange={() => handleToggleSelect(booking.id)}
-                                                />
-                                            </div>
-
-                                            <div className="flex-1 min-w-0">
-                                                <div className="flex items-center justify-between">
-                                                    {/* Date & Time */}
-                                                    <div className="flex items-center gap-2 text-sm font-medium text-white">
-                                                        {format(new Date(booking.start_time), "EEEE d MMM", { locale: es })}
-                                                    </div>
-                                                    <div className="text-sm font-bold text-[#ccff00]">
-                                                        {formatCurrency(booking.price || 0)}
-                                                    </div>
+                            {/* List */}
+                            <div className="flex-1 overflow-y-auto pr-2 space-y-3 -mr-2">
+                                {loadingPending && pendingBookings.length === 0 ? (
+                                    <div className="flex justify-center items-center h-32">
+                                        <Loader2 className="h-6 w-6 animate-spin text-zinc-500" />
+                                    </div>
+                                ) : pendingBookings.length > 0 ? (
+                                    pendingBookings.map((booking) => (
+                                        <div
+                                            key={booking.id}
+                                            className={`p-3 rounded-lg border transition-colors ${selectedIds.has(booking.id) ? 'bg-zinc-800/50 border-emerald-500/30' : 'bg-zinc-900 border-zinc-800 hover:border-zinc-700'}`}
+                                        >
+                                            <div className="flex items-start gap-3">
+                                                <div className="pt-1">
+                                                    <Checkbox
+                                                        checked={selectedIds.has(booking.id)}
+                                                        onCheckedChange={() => handleToggleSelect(booking.id)}
+                                                    />
                                                 </div>
 
-                                                <div className="flex items-center gap-2 mt-1 text-xs text-zinc-400">
-                                                    <Clock className="h-3 w-3" />
-                                                    {format(new Date(booking.start_time), "HH:mm")} - {format(new Date(booking.end_time), "HH:mm")}
-                                                    <span className="text-zinc-600">|</span>
-                                                    <MapPin className="h-3 w-3" />
-                                                    {booking.court?.name || 'Cancha'}
-                                                </div>
-
-                                                <div className="flex items-center justify-between mt-2">
-                                                    <div className="flex items-center gap-2 text-sm text-zinc-300">
-                                                        <User className="h-3.5 w-3.5 text-zinc-500" />
-                                                        <span className="truncate max-w-[120px] sm:max-w-[150px]">
-                                                            {booking.user?.full_name || 'Cliente'}
-                                                        </span>
+                                                <div className="flex-1 min-w-0">
+                                                    <div className="flex items-center justify-between">
+                                                        {/* Date & Time */}
+                                                        <div className="flex items-center gap-2 text-sm font-medium text-white">
+                                                            {format(new Date(booking.start_time), "EEEE d MMM", { locale: es })}
+                                                        </div>
+                                                        <div className="text-sm font-bold text-[#ccff00]">
+                                                            {formatCurrency(booking.price || 0)}
+                                                        </div>
                                                     </div>
 
-                                                    <div className="flex gap-2">
-                                                        {booking.user?.phone && (
+                                                    <div className="flex items-center gap-2 mt-1 text-xs text-zinc-400">
+                                                        <Clock className="h-3 w-3" />
+                                                        {format(new Date(booking.start_time), "HH:mm")} - {format(new Date(booking.end_time), "HH:mm")}
+                                                        <span className="text-zinc-600">|</span>
+                                                        <MapPin className="h-3 w-3" />
+                                                        {booking.court?.name || 'Cancha'}
+                                                    </div>
+
+                                                    <div className="flex items-center justify-between mt-2">
+                                                        <div className="flex items-center gap-2 text-sm text-zinc-300">
+                                                            <User className="h-3.5 w-3.5 text-zinc-500" />
+                                                            <span className="truncate max-w-[120px] sm:max-w-[150px]">
+                                                                {booking.user?.full_name || 'Cliente'}
+                                                            </span>
+                                                        </div>
+
+                                                        <div className="flex gap-2">
+                                                            {booking.user?.phone && (
+                                                                <Button
+                                                                    size="icon"
+                                                                    variant="ghost"
+                                                                    className="h-7 w-7 text-green-500 hover:text-green-400 hover:bg-green-500/10"
+                                                                    onClick={() => handleSendWhatsApp(booking)}
+                                                                    title="Enviar recordatorio por WhatsApp"
+                                                                >
+                                                                    <MessageCircle className="h-4 w-4" />
+                                                                </Button>
+                                                            )}
+
+                                                            {/* Alert: Contact Mismatch */}
+                                                            {/* Alert: Contact Mismatch */}
+                                                            {booking.metadata?.alt_contact && (
+                                                                <div className="flex items-center gap-1 text-[10px] text-amber-500 bg-amber-500/10 px-1.5 py-0.5 rounded border border-amber-500/20" title="Teléfono Alternativo de Reserva">
+                                                                    <Phone className="h-3 w-3" />
+                                                                    <span>{booking.metadata.alt_contact}</span>
+                                                                </div>
+                                                            )}
+                                                            {booking.metadata?.alt_email && !booking.metadata?.alt_contact && (
+                                                                <div className="flex items-center gap-1 text-[10px] text-amber-500 bg-amber-500/10 px-1.5 py-0.5 rounded border border-amber-500/20" title="Email Alternativo de Reserva">
+                                                                    <span className="font-bold text-xs">@</span>
+                                                                    <span className="truncate max-w-[80px]">Alt. Email</span>
+                                                                </div>
+                                                            )}
+
                                                             <Button
-                                                                size="icon"
-                                                                variant="ghost"
-                                                                className="h-7 w-7 text-green-500 hover:text-green-400 hover:bg-green-500/10"
-                                                                onClick={() => handleSendWhatsApp(booking)}
-                                                                title="Enviar recordatorio por WhatsApp"
+                                                                size="sm"
+                                                                variant="outline"
+                                                                className="h-7 text-xs border-emerald-600 text-emerald-500 hover:bg-emerald-600 hover:text-white px-2"
+                                                                onClick={() => handleMarkAsPaid(booking.id)}
                                                             >
-                                                                <MessageCircle className="h-4 w-4" />
+                                                                Pagar
                                                             </Button>
-                                                        )}
-                                                        <Button
-                                                            size="sm"
-                                                            variant="outline"
-                                                            className="h-7 text-xs border-emerald-600 text-emerald-500 hover:bg-emerald-600 hover:text-white px-2"
-                                                            onClick={() => handleMarkAsPaid(booking.id)}
-                                                        >
-                                                            Pagar
-                                                        </Button>
+                                                        </div>
                                                     </div>
                                                 </div>
                                             </div>
                                         </div>
-                                    </div>
-                                ))
-                            ) : (
-                                <div className="text-center py-12 text-zinc-500">
-                                    <div className="flex justify-center mb-4">
-                                        <div className="h-12 w-12 rounded-full bg-emerald-500/10 flex items-center justify-center">
-                                            <CheckCircle2 className="h-6 w-6 text-emerald-500" />
+                                    ))
+                                ) : (
+                                    <div className="text-center py-12 text-zinc-500">
+                                        <div className="flex justify-center mb-4">
+                                            <div className="h-12 w-12 rounded-full bg-emerald-500/10 flex items-center justify-center">
+                                                <CheckCircle2 className="h-6 w-6 text-emerald-500" />
+                                            </div>
                                         </div>
+                                        <p className="text-lg font-medium text-white">¡Todo al día!</p>
+                                        <p className="text-sm">No se encontraron pagos pendientes con estos filtros.</p>
                                     </div>
-                                    <p className="text-lg font-medium text-white">¡Todo al día!</p>
-                                    <p className="text-sm">No se encontraron pagos pendientes con estos filtros.</p>
-                                </div>
-                            )}
+                                )}
 
-                            {/* Load More */}
-                            {pendingBookings.length >= limit && (
-                                <Button
-                                    variant="ghost"
-                                    className="w-full mt-2 text-zinc-400 hover:text-white"
-                                    onClick={() => setLimit(prev => prev + 20)}
-                                    disabled={loadingPending}
-                                >
-                                    {loadingPending ? <Loader2 className="h-4 w-4 animate-spin" /> : "Cargar más"}
-                                </Button>
-                            )}
-                        </div>
-                    </SheetContent>
-                </Sheet>
+                                {/* Load More */}
+                                {pendingBookings.length >= limit && (
+                                    <Button
+                                        variant="ghost"
+                                        className="w-full mt-2 text-zinc-400 hover:text-white"
+                                        onClick={() => setLimit(prev => prev + 20)}
+                                        disabled={loadingPending}
+                                    >
+                                        {loadingPending ? <Loader2 className="h-4 w-4 animate-spin" /> : "Cargar más"}
+                                    </Button>
+                                )}
+                            </div>
+                        </SheetContent>
+                    </Sheet>
+                </div>
+            </div>
 
+            {/* KPI TRINITY (Bento Box Row 1) */}
+            <div className="grid gap-4 md:grid-cols-3">
                 {/* Total Revenue */}
-                <Card>
+                <Card className="bg-zinc-900/50 border-zinc-800 backdrop-blur-sm">
                     <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                        <CardTitle className="text-sm font-medium">Ingresos del Mes</CardTitle>
-                        <DollarSign className="h-4 w-4 text-emerald-500" />
+                        <CardTitle className="text-sm font-medium text-zinc-400">Ingresos del Mes</CardTitle>
+                        <DollarSign className="h-4 w-4 text-[#ccff00]" />
                     </CardHeader>
                     <CardContent>
-                        <div className="text-2xl font-bold">{formatCurrency(stats.kpi.totalRevenue || 0)}</div>
-                        <p className="text-xs text-muted-foreground">
-                            {stats.kpi.revenueGrowth >= 0 ? '+' : ''}{stats.kpi.revenueGrowth?.toFixed(1) || 0}% vs mes anterior
-                        </p>
-                    </CardContent>
-                </Card>
-
-                {/* Today's Bookings */}
-                <Card>
-                    <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                        <CardTitle className="text-sm font-medium">Reservas Hoy</CardTitle>
-                        <Calendar className="h-4 w-4 text-blue-500" />
-                    </CardHeader>
-                    <CardContent>
-                        <div className="text-2xl font-bold">{todayBookings}</div>
-                        <p className="text-xs text-muted-foreground">
-                            {stats.kpi.totalBookings || 0} este mes
+                        <div className="text-2xl font-bold text-white">{formatCurrency(stats.kpi.totalRevenue || 0)}</div>
+                        <p className="text-xs text-zinc-500">
+                            <span className={stats.kpi.revenueGrowth >= 0 ? "text-emerald-500" : "text-red-500"}>
+                                {stats.kpi.revenueGrowth >= 0 ? '+' : ''}{stats.kpi.revenueGrowth?.toFixed(1) || 0}%
+                            </span> vs mes anterior
                         </p>
                     </CardContent>
                 </Card>
 
                 {/* Occupancy */}
-                <Card>
+                <Card className="bg-zinc-900/50 border-zinc-800 backdrop-blur-sm">
                     <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                        <CardTitle className="text-sm font-medium">Ocupación</CardTitle>
-                        <Activity className="h-4 w-4 text-[#ccff00]" />
+                        <CardTitle className="text-sm font-medium text-zinc-400">Ocupación</CardTitle>
+                        <Activity className="h-4 w-4 text-blue-500" />
                     </CardHeader>
                     <CardContent>
-                        <div className="text-2xl font-bold">{stats.kpi.occupancyRate || 0}%</div>
-                        <p className="text-xs text-muted-foreground">
-                            {stats.kpi.occupancyGrowth >= 0 ? '+' : ''}{stats.kpi.occupancyGrowth?.toFixed(1) || 0}% vs mes anterior
+                        <div className="text-2xl font-bold text-white">{stats.kpi.occupancyRate || 0}%</div>
+                        <p className="text-xs text-zinc-500">
+                            <span className={stats.kpi.occupancyGrowth >= 0 ? "text-emerald-500" : "text-red-500"}>
+                                {stats.kpi.occupancyGrowth >= 0 ? '+' : ''}{stats.kpi.occupancyGrowth?.toFixed(1) || 0}%
+                            </span> vs mes anterior
                         </p>
                     </CardContent>
                 </Card>
 
-                {/* Active Clients Sheet */}
-                <Sheet open={activeClientsSheetOpen} onOpenChange={setActiveClientsSheetOpen}>
-                    <SheetTrigger asChild>
-                        <Card className="cursor-pointer transition-all hover:bg-accent hover:border-purple-500/50 group">
-                            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                                <CardTitle className="text-sm font-medium">Clientes Activos</CardTitle>
-                                <Users className="h-4 w-4 text-purple-500" />
-                            </CardHeader>
-                            <CardContent>
-                                <div className="flex items-center justify-between">
-                                    <div>
-                                        <div className="text-2xl font-bold">{stats.kpi.activeClients || 0}</div>
-                                        <p className="text-xs text-muted-foreground">
-                                            {stats.kpi.clientsGrowth >= 0 ? '+' : ''}{stats.kpi.clientsGrowth?.toFixed(1) || 0}% vs mes anterior
-                                        </p>
-                                    </div>
-                                    <ChevronRight className="h-5 w-5 opacity-0 group-hover:opacity-100 transition-opacity text-purple-500" />
-                                </div>
-                            </CardContent>
-                        </Card>
-                    </SheetTrigger>
-                    <SheetContent className="bg-zinc-950 border-zinc-800 w-[400px] sm:w-[540px] flex flex-col h-full">
-                        <SheetHeader className="pb-4 border-b border-zinc-800">
-                            <SheetTitle className="text-white flex items-center gap-2">
-                                <Users className="h-5 w-5 text-purple-500" />
-                                Clientes Activos ({activeClientsList.length})
-                            </SheetTitle>
-                            <SheetDescription className="text-zinc-400">
-                                Tus mejores clientes {activeClientsDateFilter ? 'del día seleccionado' : 'de este mes'}.
-                            </SheetDescription>
-                        </SheetHeader>
-
-                        {/* Controls */}
-                        <div className="py-4 space-y-4">
-                            <div className="flex gap-2">
-                                <div className="relative flex-1">
-                                    <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
-                                    <Input
-                                        placeholder="Buscar por nombre..."
-                                        className="pl-9 bg-zinc-900 border-zinc-700"
-                                        value={activeClientsSearch}
-                                        onChange={(e) => setActiveClientsSearch(e.target.value)}
-                                    />
-                                </div>
-                                <Input
-                                    type="date"
-                                    className="w-[140px] bg-zinc-900 border-zinc-700"
-                                    value={activeClientsDateFilter}
-                                    onChange={(e) => setActiveClientsDateFilter(e.target.value)}
-                                />
-                            </div>
-                        </div>
-
-                        {/* List */}
-                        <div className="flex-1 overflow-y-auto pr-2 space-y-3 -mr-2">
-                            {loadingActiveClients ? (
-                                <div className="flex justify-center items-center h-48">
-                                    <Loader2 className="h-8 w-8 animate-spin text-purple-500" />
-                                </div>
-                            ) : activeClientsList.length > 0 ? (
-                                activeClientsList.map((client) => (
-                                    <div
-                                        key={client.id}
-                                        className="p-3 rounded-lg bg-zinc-900 border border-zinc-800 hover:border-purple-500/30 transition-colors flex items-center justify-between group/item"
-                                    >
-                                        <div className="flex items-center gap-3">
-                                            <div className="h-10 w-10 rounded-full bg-purple-500/10 flex items-center justify-center border border-purple-500/20">
-                                                <span className="text-purple-400 font-semibold text-sm">
-                                                    {client.full_name.substring(0, 2).toUpperCase()}
-                                                </span>
-                                            </div>
-                                            <div>
-                                                <div className="font-medium text-white">{client.full_name}</div>
-                                                <div className="text-xs text-zinc-400 flex items-center gap-2">
-                                                    <span className="text-purple-400 font-medium">
-                                                        {client.count} reservas
-                                                    </span>
-                                                    <span>•</span>
-                                                    <span>Ultima: {format(new Date(client.lastDate), "d MMM", { locale: es })}</span>
-                                                </div>
-                                            </div>
-                                        </div>
-
-                                        <div className="flex items-center gap-4">
-                                            <div className="text-right">
-                                                <div className="text-sm font-bold text-emerald-500">
-                                                    {formatCurrency(client.spent)}
-                                                </div>
-                                                <div className="text-[10px] text-zinc-500 uppercase tracking-wider">
-                                                    Total Gastado
-                                                </div>
-                                            </div>
-
-                                            {client.phone && (
-                                                <Button
-                                                    size="icon"
-                                                    variant="ghost"
-                                                    className="h-8 w-8 text-zinc-400 hover:text-green-500 hover:bg-green-500/10 opacity-0 group-hover/item:opacity-100 transition-all"
-                                                    onClick={(e) => {
-                                                        e.stopPropagation()
-                                                        handleContactClient(client)
-                                                    }}
-                                                >
-                                                    <MessageCircle className="h-4 w-4" />
-                                                </Button>
-                                            )}
-                                        </div>
-                                    </div>
-                                ))
-                            ) : (
-                                <div className="text-center py-12 text-zinc-500">
-                                    <Users className="h-12 w-12 mx-auto text-zinc-700 mb-3" />
-                                    <p>No se encontraron clientes activos en este periodo.</p>
-                                </div>
-                            )}
-                        </div>
-                    </SheetContent>
-                </Sheet>
+                {/* Today's Bookings */}
+                <Card className="bg-zinc-900/50 border-zinc-800 backdrop-blur-sm">
+                    <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+                        <CardTitle className="text-sm font-medium text-zinc-400">Reservas Hoy</CardTitle>
+                        <Calendar className="h-4 w-4 text-purple-500" />
+                    </CardHeader>
+                    <CardContent>
+                        <div className="text-2xl font-bold text-white">{todayBookings}</div>
+                        <p className="text-xs text-zinc-500">
+                            {stats.kpi.totalBookings || 0} este mes total
+                        </p>
+                    </CardContent>
+                </Card>
             </div>
 
             <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-7">
@@ -932,17 +937,15 @@ export default function ClubDashboardPage() {
 
             {/* Financial Intelligence Section */}
             <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-7">
-                <div className="col-span-full lg:col-span-3">
-                    <TopSpenders />
+                <div className="col-span-full h-full">
+                    <TopSpenders
+                        clients={activeClientsList}
+                        loading={loadingActiveClients}
+                        totalActiveCount={stats.kpi.activeClients || activeClientsList.length}
+                        onViewAll={() => setActiveClientsSheetOpen(true)}
+                    />
                 </div>
             </div>
-
-            {/* Academy Hosting Requests Section */}
-            {activeWorkspace && (
-                <div className="mt-8">
-                    <ClubHostingRequests clubId={activeWorkspace.entity_id} />
-                </div>
-            )}
         </div>
     )
 }

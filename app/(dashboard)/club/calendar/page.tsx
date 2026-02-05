@@ -7,6 +7,7 @@ import {
     AvailabilityGrid,
     GridBooking
 } from "@/components/club/AvailabilityGrid"
+import { createBookingAction } from "@/app/actions/booking"
 import { MonthOverview } from "@/components/club/calendar/MonthOverview"
 import {
     EntityConfiguration,
@@ -143,7 +144,8 @@ export default function ClubCalendarPage() {
                 paymentStatus: b.payment_status || 'pending',
                 totalPrice: b.price || 0, // Map from DB 'price' column
                 participant_checkin: b.participant_checkin,
-                recurring_plan_id: b.recurring_plan_id
+                recurring_plan_id: b.recurring_plan_id,
+                metadata: b.metadata || {}
             }))
 
             setBookings(mappedBookings)
@@ -157,9 +159,10 @@ export default function ClubCalendarPage() {
         }
     }
 
-    const handleCreateBooking = async (booking: { courtId: string, startTime: Date, endTime: Date, name: string, isPaid: boolean, price: number, userId?: string | null, description?: string }) => {
+    const handleCreateBooking = async (booking: { courtId: string, startTime: Date, endTime: Date, name: string, isPaid: boolean, price: number, userId?: string | null, description?: string, phone?: string, email?: string }) => {
         if (!orgId) return
         try {
+            // Optimistic UI Update
             const newBooking: GridBooking = {
                 id: 'temp-' + Date.now(),
                 courtId: booking.courtId,
@@ -172,22 +175,37 @@ export default function ClubCalendarPage() {
             }
             setBookings(prev => [...prev, newBooking])
 
-            const { error } = await supabase.from('bookings').insert({
-                entity_id: orgId,
-                court_id: booking.courtId,
-                start_time: booking.startTime.toISOString(),
-                end_time: booking.endTime.toISOString(),
-                title: booking.name,
-                description: booking.description,
-                payment_status: booking.isPaid ? 'paid' : 'pending',
-                user_id: booking.userId || null,
-                price: booking.price
+            // WORLD CLASS SERVER ACTION
+            let phoneToSave = booking.phone
+            let cleanDescription = booking.description
+
+            // Legacy Phone Logic in Description
+            if (!phoneToSave && booking.description && booking.description.startsWith("TLF: ")) {
+                phoneToSave = booking.description.replace("TLF: ", "").trim()
+                cleanDescription = undefined // Clear redundancy
+            }
+
+            const result = await createBookingAction({
+                entityId: orgId,
+                courtId: booking.courtId,
+                startTime: booking.startTime,
+                endTime: booking.endTime,
+                name: booking.name,
+                isPaid: booking.isPaid,
+                price: booking.price,
+                userId: booking.userId,
+                phone: phoneToSave,
+                email: booking.email,
+                description: cleanDescription
             })
-            if (error) throw error
-            toast({ title: "Reserva Creada", description: "Guardada exitosamente." })
+
+            if (!result.success) throw new Error(result.error)
+
+            toast({ title: "Reserva Creada", description: "Guardada exitosamente en CRM." })
             fetchData(orgId, date, viewMode)
         } catch (error: any) {
             toast({ variant: "destructive", title: "Error", description: error.message })
+            // Revert state if needed, but fetchData usually corrects it
             fetchData(orgId, date, viewMode)
         }
     }

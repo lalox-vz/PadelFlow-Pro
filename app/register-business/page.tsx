@@ -111,31 +111,70 @@ export default function RegisterBusinessPage() {
                         <>
                             {/* CLUB CARD */}
                             {existingEntities.find(e => e.type === 'CLUB') ? (
-                                <Card
-                                    className="group relative bg-[#ccff00]/10 border-[#ccff00] transition-all duration-300 cursor-pointer overflow-hidden hover:shadow-2xl h-full"
-                                    onClick={() => router.push('/club/dashboard')}
-                                >
-                                    <div className="absolute inset-0 bg-[#ccff00]/5 group-hover:bg-[#ccff00]/10 transition-colors duration-300" />
-                                    <CardHeader className="text-center pb-2 relative z-10">
-                                        <div className="mx-auto bg-[#ccff00] rounded-full p-4 w-20 h-20 flex items-center justify-center mb-4 shadow-[0_0_20px_rgba(204,255,0,0.3)]">
-                                            <Check className="w-10 h-10 text-black" />
-                                        </div>
-                                        <CardTitle className="text-2xl font-bold text-white">
-                                            {existingEntities.find(e => e.type === 'CLUB').name}
-                                        </CardTitle>
-                                        <CardDescription className="text-[#ccff00]">
-                                            Club Registrado y Activo
-                                        </CardDescription>
-                                    </CardHeader>
-                                    <CardContent className="space-y-4 pt-4 text-center relative z-10">
-                                        <p className="text-sm text-zinc-400 max-w-[80%] mx-auto">
-                                            Tu club ya está configurado. Accede al panel para gestionar tus canchas.
-                                        </p>
-                                        <Button className="w-full mt-6 bg-[#ccff00] text-black hover:bg-[#b5952f]">
-                                            <Settings className="w-4 h-4 mr-2" /> Gestionar mi Club
-                                        </Button>
-                                    </CardContent>
-                                </Card>
+                                (() => {
+                                    // LOGIC: Distinguish between DRAFT and ACTIVE based on User Role
+                                    const isClubOwner = user?.role === 'club_owner' || (user?.user_metadata as any)?.role === 'club_owner'
+                                    const entityName = existingEntities.find(e => e.type === 'CLUB').name
+
+                                    if (isClubOwner) {
+                                        // ACTIVE STATE
+                                        return (
+                                            <Card
+                                                className="group relative bg-[#ccff00]/10 border-[#ccff00] transition-all duration-300 cursor-pointer overflow-hidden hover:shadow-2xl h-full"
+                                                onClick={() => router.push('/club/dashboard')}
+                                            >
+                                                <div className="absolute inset-0 bg-[#ccff00]/5 group-hover:bg-[#ccff00]/10 transition-colors duration-300" />
+                                                <CardHeader className="text-center pb-2 relative z-10">
+                                                    <div className="mx-auto bg-[#ccff00] rounded-full p-4 w-20 h-20 flex items-center justify-center mb-4 shadow-[0_0_20px_rgba(204,255,0,0.3)]">
+                                                        <Check className="w-10 h-10 text-black" />
+                                                    </div>
+                                                    <CardTitle className="text-2xl font-bold text-white">
+                                                        {entityName}
+                                                    </CardTitle>
+                                                    <CardDescription className="text-[#ccff00]">
+                                                        Club Registrado y Activo
+                                                    </CardDescription>
+                                                </CardHeader>
+                                                <CardContent className="space-y-4 pt-4 text-center relative z-10">
+                                                    <p className="text-sm text-zinc-400 max-w-[80%] mx-auto">
+                                                        Tu club ya está configurado. Accede al panel para gestionar tus canchas.
+                                                    </p>
+                                                    <Button className="w-full mt-6 bg-[#ccff00] text-black hover:bg-[#b5952f]">
+                                                        <Settings className="w-4 h-4 mr-2" /> Gestionar mi Club
+                                                    </Button>
+                                                </CardContent>
+                                            </Card>
+                                        )
+                                    } else {
+                                        // DRAFT STATE
+                                        return (
+                                            <Card
+                                                className="group relative bg-zinc-900/80 border-dashed border-[#ccff00]/50 hover:border-[#ccff00] transition-all duration-300 cursor-pointer overflow-hidden h-full"
+                                                onClick={() => router.push('/register-business/club')}
+                                            >
+                                                <CardHeader className="text-center pb-2 relative z-10">
+                                                    <div className="mx-auto bg-zinc-800 rounded-full p-4 w-20 h-20 flex items-center justify-center mb-4 border border-[#ccff00]/30">
+                                                        <Loader2 className="w-10 h-10 text-[#ccff00]" />
+                                                    </div>
+                                                    <CardTitle className="text-2xl font-bold text-white">
+                                                        {entityName}
+                                                    </CardTitle>
+                                                    <CardDescription className="text-zinc-400">
+                                                        Configuración Pendiente
+                                                    </CardDescription>
+                                                </CardHeader>
+                                                <CardContent className="space-y-4 pt-4 text-center relative z-10">
+                                                    <p className="text-sm text-zinc-500 max-w-[80%] mx-auto">
+                                                        Tienes un borrador guardado. Continúa donde lo dejaste.
+                                                    </p>
+                                                    <Button className="w-full mt-6 bg-[#ccff00] text-black hover:bg-[#b5952f] font-bold shadow-[0_0_15px_rgba(204,255,0,0.2)]">
+                                                        <ArrowRight className="w-4 h-4 mr-2" /> Continuar Configuración
+                                                    </Button>
+                                                </CardContent>
+                                            </Card>
+                                        )
+                                    }
+                                })()
                             ) : (
                                 <Card
                                     className="group relative bg-card/50 backdrop-blur-sm border-muted hover:border-[#ccff00] transition-all duration-300 cursor-pointer overflow-hidden transform hover:-translate-y-1 hover:shadow-2xl h-full"
@@ -183,31 +222,68 @@ export default function RegisterBusinessPage() {
 
                             {/* ACADEMY CARD */}
                             {existingEntities.find(e => e.type === 'ACADEMY') ? (
-                                <Card
-                                    className="group relative bg-blue-500/10 border-blue-500 transition-all duration-300 cursor-pointer overflow-hidden hover:shadow-2xl h-full"
-                                    onClick={() => router.push('/academy/dashboard')}
-                                >
-                                    <div className="absolute inset-0 bg-blue-500/5 group-hover:bg-blue-500/10 transition-colors duration-300" />
-                                    <CardHeader className="text-center pb-2 relative z-10">
-                                        <div className="mx-auto bg-blue-500 rounded-full p-4 w-20 h-20 flex items-center justify-center mb-4 shadow-[0_0_20px_rgba(59,130,246,0.5)]">
-                                            <Check className="w-10 h-10 text-white" />
-                                        </div>
-                                        <CardTitle className="text-2xl font-bold text-white">
-                                            {existingEntities.find(e => e.type === 'ACADEMY').name}
-                                        </CardTitle>
-                                        <CardDescription className="text-blue-400">
-                                            Academia Registrada y Activa
-                                        </CardDescription>
-                                    </CardHeader>
-                                    <CardContent className="space-y-4 pt-4 text-center relative z-10">
-                                        <p className="text-sm text-zinc-400 max-w-[80%] mx-auto">
-                                            Tu academia está lista. Gestiona tus alumnos y clases desde el dashboard.
-                                        </p>
-                                        <Button className="w-full mt-6 bg-blue-600 text-white hover:bg-blue-700">
-                                            <Settings className="w-4 h-4 mr-2" /> Gestionar mi Academia
-                                        </Button>
-                                    </CardContent>
-                                </Card>
+                                (() => {
+                                    // LOGIC: Distinguish between DRAFT and ACTIVE based on User Role
+                                    const isAcademyOwner = user?.role === 'academy_owner' || (user?.user_metadata as any)?.role === 'academy_owner'
+                                    const entityName = existingEntities.find(e => e.type === 'ACADEMY').name
+
+                                    if (isAcademyOwner) {
+                                        return (
+                                            <Card
+                                                className="group relative bg-blue-500/10 border-blue-500 transition-all duration-300 cursor-pointer overflow-hidden hover:shadow-2xl h-full"
+                                                onClick={() => router.push('/academy/dashboard')}
+                                            >
+                                                <div className="absolute inset-0 bg-blue-500/5 group-hover:bg-blue-500/10 transition-colors duration-300" />
+                                                <CardHeader className="text-center pb-2 relative z-10">
+                                                    <div className="mx-auto bg-blue-500 rounded-full p-4 w-20 h-20 flex items-center justify-center mb-4 shadow-[0_0_20px_rgba(59,130,246,0.5)]">
+                                                        <Check className="w-10 h-10 text-white" />
+                                                    </div>
+                                                    <CardTitle className="text-2xl font-bold text-white">
+                                                        {entityName}
+                                                    </CardTitle>
+                                                    <CardDescription className="text-blue-400">
+                                                        Academia Registrada y Activa
+                                                    </CardDescription>
+                                                </CardHeader>
+                                                <CardContent className="space-y-4 pt-4 text-center relative z-10">
+                                                    <p className="text-sm text-zinc-400 max-w-[80%] mx-auto">
+                                                        Tu academia está lista. Gestiona tus alumnos y clases desde el dashboard.
+                                                    </p>
+                                                    <Button className="w-full mt-6 bg-blue-600 text-white hover:bg-blue-700">
+                                                        <Settings className="w-4 h-4 mr-2" /> Gestionar mi Academia
+                                                    </Button>
+                                                </CardContent>
+                                            </Card>
+                                        )
+                                    } else {
+                                        return (
+                                            <Card
+                                                className="group relative bg-zinc-900/80 border-dashed border-blue-500/50 hover:border-blue-500 transition-all duration-300 cursor-pointer overflow-hidden h-full"
+                                                onClick={() => router.push('/register-business/academy')}
+                                            >
+                                                <CardHeader className="text-center pb-2 relative z-10">
+                                                    <div className="mx-auto bg-zinc-800 rounded-full p-4 w-20 h-20 flex items-center justify-center mb-4 border border-blue-500/30">
+                                                        <Loader2 className="w-10 h-10 text-blue-500" />
+                                                    </div>
+                                                    <CardTitle className="text-2xl font-bold text-white">
+                                                        {entityName}
+                                                    </CardTitle>
+                                                    <CardDescription className="text-zinc-400">
+                                                        Configuración Pendiente
+                                                    </CardDescription>
+                                                </CardHeader>
+                                                <CardContent className="space-y-4 pt-4 text-center relative z-10">
+                                                    <p className="text-sm text-zinc-500 max-w-[80%] mx-auto">
+                                                        Tienes un borrador de academia. Continúa donde lo dejaste.
+                                                    </p>
+                                                    <Button className="w-full mt-6 bg-blue-600 text-white hover:bg-blue-700 font-bold shadow-[0_0_15px_rgba(59,130,246,0.2)]">
+                                                        <ArrowRight className="w-4 h-4 mr-2" /> Continuar Configuración
+                                                    </Button>
+                                                </CardContent>
+                                            </Card>
+                                        )
+                                    }
+                                })()
                             ) : (
                                 <Card
                                     className="group relative bg-card/50 backdrop-blur-sm border-muted hover:border-blue-500 transition-all duration-300 cursor-pointer overflow-hidden transform hover:-translate-y-1 hover:shadow-2xl h-full"

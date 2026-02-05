@@ -1,14 +1,11 @@
-import { Navbar } from "@/components/marketing/Navbar"
-
 export default function AuthLayout({
     children,
 }: {
     children: React.ReactNode
 }) {
     return (
-        <div className="flex min-h-screen flex-col">
-            <Navbar />
-            <main className="flex-1 flex flex-col">{children}</main>
+        <div className="min-h-screen bg-background flex flex-col">
+            {children}
         </div>
     )
 }

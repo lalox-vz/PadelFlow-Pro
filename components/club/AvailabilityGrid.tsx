@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useMemo } from "react"
+import { useState, useMemo, useEffect } from "react"
 import { format, addMinutes, isSameDay, parseISO, isWithinInterval, formatDistanceToNow } from "date-fns"
 import { es } from "date-fns/locale"
 import {
@@ -23,7 +23,7 @@ import { Label } from "@/components/ui/label"
 import { Checkbox } from "@/components/ui/checkbox"
 import { cn, toLocalTime } from "@/lib/utils"
 import Link from "next/link"
-import { Lock, Plus, User, CheckCircle2, Settings, AlertCircle, Clock, Banknote, UserCheck, Repeat } from "lucide-react"
+import { Lock, Plus, User, CheckCircle2, Settings, AlertCircle, Clock, Banknote, UserCheck, Repeat, Phone } from "lucide-react"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { createBrowserClient } from "@supabase/ssr"
 import { MemberSelector } from "./MemberSelector"
@@ -39,6 +39,7 @@ export interface GridBooking extends ExistingBooking {
     participant_checkin?: boolean
     recurring_plan_id?: string | null
     description?: string | null
+    metadata?: Record<string, any> | null
 }
 
 interface AvailabilityGridProps {
@@ -54,6 +55,9 @@ interface AvailabilityGridProps {
         isPaid: boolean,
         price: number,
         userId?: string | null
+        description?: string,
+        email?: string,
+        phone?: string
     }) => Promise<void>
     onUpdateBooking?: (bookingId: string, updates: {
         name: string,
@@ -90,6 +94,13 @@ export function AvailabilityGrid({
     // Edit booking modal state
     const [editingBooking, setEditingBooking] = useState<GridBooking | null>(null)
 
+    // Debug: Check metadata flow
+    useEffect(() => {
+        if (editingBooking) {
+            console.log('Booking Metadata:', editingBooking.metadata)
+        }
+    }, [editingBooking])
+
     // DEBUG: Inspect configuration
     console.log("DATOS RECIBIDOS EN GRID:", config)
 
@@ -99,6 +110,7 @@ export function AvailabilityGrid({
         name: '',
         userId: null as string | null,
         phone: '',
+        email: '',
         isPaid: false,
         startTime: new Date(),
         endTime: new Date(),
@@ -174,6 +186,7 @@ export function AvailabilityGrid({
             name: '',
             userId: null,
             phone: '',
+            email: '',
             isPaid: false,
             startTime: new Date(),
             endTime: new Date(),
@@ -206,6 +219,7 @@ export function AvailabilityGrid({
             name: booking.title || '',
             userId: null, // Edit doesn't support changing user link strictly yet, or we'd need to fetch it
             phone: '',
+            email: '',
             isPaid: booking.paymentStatus === 'paid',
             startTime: new Date(booking.startTime),
             endTime: new Date(booking.endTime),
@@ -418,16 +432,9 @@ export function AvailabilityGrid({
                 isPaid: bookingForm.isPaid,
                 price: selectedSlot.price,
                 userId: bookingForm.userId,
-                // Pass description via a new property if interface allowed, or append to name? 
-                // Wait, onCreateBooking interface doesn't have description.
-                // We need to update the Interface in Props first?
-                // Actually, the parent handles it. But we pass { ... }.
-                // If I can't pass description, I might append to title? No, title is visible.
-                // I will add 'description' to the onCreateBooking argument in the call, 
-                // assuming the parent function `handleCreateBooking` in page.tsx will handle it.
-                // I'll check `ClubCalendarPage` `handleCreateBooking` next step.
-                // For now, I'll pass it as an extra property.
-                description: description
+                description: description,
+                email: bookingForm.email,
+                phone: bookingForm.phone
             } as any)
             setSelectedSlot(null) // Close modal
         } catch (error) {
@@ -619,7 +626,9 @@ export function AvailabilityGrid({
                                         setBookingForm(prev => ({
                                             ...prev,
                                             name: member.name,
-                                            userId: member.id
+                                            userId: member.id,
+                                            phone: member.phone || '',
+                                            email: member.email || ''
                                         }))
                                     }}
                                     initialName={bookingForm.name}
@@ -627,9 +636,9 @@ export function AvailabilityGrid({
                             </div>
                         </div>
 
-                        {!bookingForm.userId && (
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                             <div className="space-y-2">
-                                <Label>Teléfono (Obligatorio para Manuales)</Label>
+                                <Label>Teléfono</Label>
                                 <PhoneInput
                                     placeholder="Ingresa número de teléfono"
                                     defaultCountry="VE"
@@ -637,11 +646,29 @@ export function AvailabilityGrid({
                                     onChange={(value) => setBookingForm(prev => ({ ...prev, phone: value || '' }))}
                                     className="flex h-10 w-full rounded-md border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm ring-offset-background file:border-0 file:bg-transparent file:text-sm file:font-medium placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
                                 />
-                                <p className="text-[10px] text-zinc-500">
-                                    Necesario para rastrear el historial del cliente (Reservas, Pagos, etc).
-                                </p>
                             </div>
-                        )}
+
+                            <div className="space-y-2">
+                                <Label>Email (Opcional)</Label>
+                                <Input
+                                    placeholder="ejemplo@correo.com"
+                                    value={bookingForm.email}
+                                    onChange={(e) => setBookingForm(prev => ({ ...prev, email: e.target.value }))}
+                                    className="bg-zinc-900 border-zinc-700"
+                                />
+                            </div>
+                        </div>
+
+                        <div className="p-2.5 bg-zinc-900/50 rounded border border-zinc-800/50 text-xs text-zinc-400">
+                            <p className="flex items-start gap-2">
+                                <UserCheck className="w-4 h-4 text-emerald-500 shrink-0 mt-0.5" />
+                                <span>
+                                    {bookingForm.userId
+                                        ? "Usuario de App vinculado. El teléfono está protegido."
+                                        : "Usuario Manual. Completa los datos para enriquecer la ficha."}
+                                </span>
+                            </p>
+                        </div>
 
                         <div className="flex items-center space-x-2 bg-zinc-900 p-3 rounded-lg border border-zinc-800">
                             <Checkbox
@@ -698,6 +725,34 @@ export function AvailabilityGrid({
 
                     {/* Scrollable Content */}
                     <div className="space-y-4 py-4 max-h-[60vh] overflow-y-auto pr-2">
+
+                        {/* ALERT: Contact Mismatch (Girlfriend Scenario) */}
+                        {(editingBooking?.metadata?.alt_contact || editingBooking?.metadata?.alt_email) && (
+                            <div className="bg-amber-500/10 border border-amber-500/20 rounded-md p-3 mb-2 animate-in fade-in slide-in-from-top-1">
+                                <h4 className="flex items-center gap-2 text-sm font-semibold text-amber-500 mb-1">
+                                    <AlertCircle className="h-4 w-4" />
+                                    Datos de Contacto Alternativos
+                                </h4>
+                                <p className="text-xs text-amber-200/80 mb-2">
+                                    Esta reserva tiene datos de contacto diferentes al perfil del usuario registrado.
+                                </p>
+                                <div className="space-y-1">
+                                    {editingBooking.metadata.alt_contact && (
+                                        <div className="flex items-center gap-2 text-xs text-amber-100 bg-amber-500/20 px-2 py-1 rounded w-fit">
+                                            <Phone className="h-3 w-3" />
+                                            <span>Reserva: {editingBooking.metadata.alt_contact}</span>
+                                        </div>
+                                    )}
+                                    {editingBooking.metadata.alt_email && (
+                                        <div className="flex items-center gap-2 text-xs text-amber-100 bg-amber-500/20 px-2 py-1 rounded w-fit">
+                                            <span className="font-bold">@</span>
+                                            <span>Reserva: {editingBooking.metadata.alt_email}</span>
+                                        </div>
+                                    )}
+                                </div>
+                            </div>
+                        )}
+
                         {/* STAFF QUICK ACTIONS */}
                         <div className="grid grid-cols-2 gap-3 pb-2">
                             <Button

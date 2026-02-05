@@ -11,7 +11,7 @@ import { searchClubMembers, MemberResult } from "@/app/actions/crm"
 import { Badge } from "@/components/ui/badge"
 
 interface MemberSelectorProps {
-    onSelect: (member: { id: string | null; name: string }) => void
+    onSelect: (member: { id: string | null; name: string; phone?: string | null; email?: string | null }) => void
     initialName?: string
 }
 
@@ -69,13 +69,18 @@ export function MemberSelector({ onSelect, initialName = "" }: MemberSelectorPro
 
     const handleSelectMember = (member: MemberResult) => {
         setInputValue(member.full_name)
-        // Critical: If they have a user_id, link it! otherwise standard manual booking
-        onSelect({ id: member.user_id, name: member.full_name })
+        // Pass phone and email to parent for auto-fill
+        onSelect({
+            id: member.user_id,
+            name: member.full_name,
+            phone: member.phone,
+            email: member.email
+        })
         setOpen(false)
     }
 
     const handleManualEntry = () => {
-        onSelect({ id: null, name: inputValue })
+        onSelect({ id: null, name: inputValue, phone: '', email: '' })
         setOpen(false)
     }
 

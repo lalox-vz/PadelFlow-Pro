@@ -79,3 +79,17 @@
     @apply bg-background text-foreground;
   }
 }
+
+@layer utilities {
+    .scrollbar-hide::-webkit-scrollbar {
+        display: none;
+    }
+    .scrollbar-hide {
+        -ms-overflow-style: none;
+        scrollbar-width: none;
+    }
+    
+    .animate-pulse-3 {
+        animation: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) 3;
+    }
+}
