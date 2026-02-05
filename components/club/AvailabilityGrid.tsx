@@ -225,9 +225,11 @@ export function AvailabilityGrid({
             endTime: new Date(booking.endTime),
             courtId: booking.courtId,
             originalPrice: isNaN(dbPrice) ? 0 : dbPrice, // Ensure valid number
-            newPrice: isNaN(currentPrice) ? 0 : currentPrice
+            // CRITICAL FIX: If it's a recurring plan (contract), preserve the DB price. Do NOT recalculate.
+            // Also good practice to preserve DB price for manual edits unless time changes.
+            newPrice: (booking.recurring_plan_id || !isNaN(dbPrice)) ? dbPrice : (isNaN(currentPrice) ? 0 : currentPrice)
         })
-        setPriceDifference(0) // No difference yet
+        setPriceDifference(0) // No difference initially
         setConflictError(null)
 
         // Fetch activity logs
@@ -876,6 +878,26 @@ export function AvailabilityGrid({
                                     Marcar si el cliente pagó la reserva.
                                 </p>
                             </div>
+                        </div>
+
+                        {/* VISUAL FIX: Financial Blindness Prevention */}
+                        <div className="flex items-center justify-between p-3 bg-zinc-900/50 rounded-lg border border-zinc-800">
+                            <div className="flex items-center gap-2">
+                                {editingBooking?.recurring_plan_id ? (
+                                    <div className="flex items-center gap-1.5 text-blue-400">
+                                        <Lock className="w-4 h-4" />
+                                        <span className="text-xs font-medium uppercase tracking-wider">Precio Contrato</span>
+                                    </div>
+                                ) : (
+                                    <div className="flex items-center gap-1.5 text-zinc-400">
+                                        <Banknote className="w-4 h-4" />
+                                        <span className="text-xs font-medium uppercase tracking-wider">Precio Reserva</span>
+                                    </div>
+                                )}
+                            </div>
+                            <span className="text-lg font-bold text-white">
+                                ${bookingForm.originalPrice}
+                            </span>
                         </div>
 
                         {conflictError && (

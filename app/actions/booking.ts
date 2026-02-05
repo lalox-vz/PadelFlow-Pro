@@ -261,8 +261,24 @@ export async function updateBookingAction(params: UpdateBookingParams) {
         if (params.courtId !== undefined) payload.court_id = params.courtId
         if (params.startTime !== undefined) payload.start_time = params.startTime
         if (params.endTime !== undefined) payload.end_time = params.endTime
-        if (params.totalPrice !== undefined) payload.price = params.totalPrice
         if (params.participant_checkin !== undefined) payload.participant_checkin = params.participant_checkin
+
+        // BUG 2 FIX: Integrity check for Recurring Plans.
+        // We must NOT overwrite the price of a Contract Booking (Recurring).
+        // The price is fixed/overridden by the plan.
+
+        // 1. Check if booking is linked to a plan
+        const { data: existing } = await supabase.from('bookings').select('recurring_plan_id, price').eq('id', params.bookingId).single()
+
+        if (params.totalPrice !== undefined) {
+            // Only update price if it's NOT a recurring plan booking
+            if (!existing?.recurring_plan_id) {
+                payload.price = params.totalPrice
+            } else {
+                // It is recurring. Ignore the incoming price override from the UI (which might vary depending on pricing rules)
+                // We trust the original price (existing.price) or simply Do Nothing to 'price' column.
+            }
+        }
 
         const { error } = await supabase
             .from('bookings')

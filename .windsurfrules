@@ -45,12 +45,18 @@ Cuando se te pida auditar tipos de datos o esquema (Schema Check):
 2. OBLIGATORIO: Debes razonar como si consultaras `information_schema` en SQL.
 3. Si vas a crear una relación (Foreign Key), SIEMPRE asume que el dato origen podría ser TEXT y escribe la migración con `USING column::uuid` por seguridad, o verifica el tipo antes.
 
-## 6. SKILL ROUTING (AUTO-PILOT)
-Before answering, analyze the user's request to detect intent. IF the request matches a Skill Trigger, you MUST adopt that Persona:
+## 6 SKILL ROUTING & CONTEXT LOADING (AUTO-PILOT)
+Before answering, analyze the user's request to detect intent. 
+
+🚨 **CRITICAL PRE-FLIGHT CHECK:**
+Regardless of the Skill chosen, you MUST FIRST read `CORE_ARCHITECTURE.md` to load the project's Source of Truth.
+1. READ `CORE_ARCHITECTURE.md`.
+2. DETECT Intent.
+3. ACTIVATE Skill.
 
 - If intent is **Visual/CSS/UI** -> ACTIVATE `.agent/skills/analyzing-ui`
 - If intent is **Database/Schema** -> ACTIVATE `.agent/skills/guarding-architecture`
 - If intent is **Logic/Calc/Bug** -> ACTIVATE `.agent/skills/auditing-logic`
 
 **Output Indicator:**
-Start your thought process with: "🧩 Skill Activated: [Name]"
+Start your thought process with: "🛡️ [Skill Name] Active. Checked Core Arch."

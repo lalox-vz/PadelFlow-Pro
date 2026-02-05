@@ -1,7 +1,7 @@
 # PADELFLOW CORE ARCHITECTURE (SOURCE OF TRUTH)
-**Version:** V3.2 (Integrity Confirmed)
-**Last Updated:** 2026-02-04
-**Status:** 🛡️ READY FOR BUSINESS LOGIC FIXES
+**Version:** V3.3 (Fixed Members Refactor Complete)
+**Last Updated:** 2026-02-05
+**Status:** 🛡️ STABLE - FIXED MEMBERS OPTIMIZED
 
 ---
 
@@ -37,6 +37,7 @@
 ### **Recurring Plans (`public.recurring_plans`)**
 - **Columns:** `id`, `member_id` (✅ Vinculado correctamente), `court_id`, `start_date`, `end_date`, `active`.
 - **Logic:** Genera reservas hijas en `bookings` vinculadas por `recurring_plan_id`.
+- **Extensiones V3:** "Push to End" (Incidencias Operativas). Permite cancelar una sesión y extender el contrato 1 semana automáticamente. Mantiene integridad financiera (Paid -> Paid).
 
 ---
 
@@ -53,8 +54,8 @@
 *Lista de tareas obligatorias para Anti antes de crear nuevas features.*
 
 ### 🟠 PRIORIDAD 2: LÓGICA DE NEGOCIO (SIGUIENTE PASO)
-1.  **Fix 'Zombie Plans' (CRITICO):** El badge de "Sesiones Restantes" es estático e inútil (siempre muestra el total inicial o resta futuro sin considerar pasado). Los planes vencidos quedan activos por siempre.
-    - *Plan:* Implementar trigger/cron o lógica de lectura inteligente que marque `active: false` cuando `end_date < now()`.
+1.  **Fix 'Zombie Plans' (RESUELTO ✅):** Badge implementado con lógica `Total - Pasado` en Server Action. Auto-vencimiento activo.
+    - *Estado:* Completado en `actions/plans.ts`.
 2.  **Fix 'Falsos Bloqueos':** Implementar estado `blocked` real (costo $0) en lugar de usar reservas falsas para mantenimiento que ensucian reportes financieros.
 
 ---
@@ -72,3 +73,17 @@
 - **Strict Types:** `bookings.court_id` convertido exitosamente de TEXT a UUID.
 - **Doc Sync:** El documento refleja la nueva columna `member_id` y restricción FK.
 - **Fix Sidebar Logic:** La navegación ahora obedece estrictamente al user_role (Club vs Academy) y no al business_type estático.
+- **Fix Logic Plans:** Cálculo dinámico de sesiones restantes y auto-vencimiento en `actions/plans.ts`.
+- **Fix Billing:** Botón "Liquidar Facturación" migrado a Server Action (`settlePlanBilling`).
+- **Refactorización de Precios:** El sistema ahora recibe 'Precio por Sesión' y calcula el 'Total del Contrato' en el backend automáticamente. Se elimina la ambigüedad en el input del usuario.
+- **Generación de Sesiones:** La lógica de "1 Mes" ahora es estricta (Iteraciones exactas vs Días calendario).
+- **Integridad de Precios:** Las reservas de Socios Fijos (`recurring_plan_id`) bloquean su precio. El calendario no puede sobrescribirlo con precios de cancha base.
+- **Lógica de Cobro (Smart Billing):** Se implementó `settlePlanBilling` con soporte para booking_ids específicos (pagos parciales).
+    - **Frontend:** Badge de deuda dinámico/cliqueable y Modal "Smart Debt Manager" para selección granular de pagos.
+    - **UX:** Feedback Optimista inmediato y textos amigables ("Gestionar Pagos").
+- **Fix UI Types:** Corrección de error de tipado en `toast` (`variant: 'secondary'`) en el módulo Fixed Members para desbloquear build.
+- **Fix Push to End:** Lógica blindada contra auto-colisiones. Ahora la extensión busca disponibilidad estrictamente `end_date + 1 día`.
+- **Truth Adjustment:** `recurring_plans.end_date` ahora se actualiza al crear el plan para reflejar la fecha FÁCTICA de la última reserva, eliminando gaps de semanas vacías.
+- **Smart Price Propagation:** Al editar un Plan Recurrente:
+    - **Cambio de Estructura (Hora/Pista):** Ejecuta "Nuke & Pave" (Borra impagas, regenera estrcutura) + Reprograma pagadas.
+    - **Cambio de Precio ($):** Ejecuta "Safe Propagation" (Actualiza solo reservas futuras impagas. NO toca las Pagadas ni Pasadas).

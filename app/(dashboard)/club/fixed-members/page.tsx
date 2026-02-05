@@ -1,6 +1,7 @@
 "use client"
 
 import { useEffect, useState } from "react"
+import { useRouter } from "next/navigation"
 import { useAuth } from "@/context/AuthContext"
 import { supabase } from "@/lib/supabase"
 import { Button } from "@/components/ui/button"
@@ -18,6 +19,7 @@ import { Checkbox } from "@/components/ui/checkbox"
 import { useToast } from "@/hooks/use-toast"
 import { Loader2, Plus, Calendar, Umbrella, MoreHorizontal, FileText, CheckCircle2, AlertTriangle, X, Banknote, Pencil, Save, CreditCard, MapPin, Clock, Search, Check, UserPlus } from "lucide-react"
 import { createClubMember } from "@/app/actions/crm"
+import { createRecurringPlan, updateRecurringPlan, getRecurringPlans, settlePlanBilling, getPendingBookings, extendPlanDueToIncident } from "@/app/actions/plans"
 import { format, parseISO, addWeeks, addMinutes, isBefore, isAfter, startOfDay, endOfMonth, startOfMonth } from "date-fns"
 import { es } from "date-fns/locale"
 import {
@@ -43,6 +45,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Switch } from "@/components/ui/switch"
 
 // --- TYPES ---
+// --- TYPES ---
 interface RecurringPlan {
     id: string
     user: { full_name: string; email: string; phone: string } | null
@@ -52,10 +55,13 @@ interface RecurringPlan {
     duration_mins: number
     start_date: string
     end_date: string
-    price: number
+    price: number // Maps to dynamic calculated unit price in frontend or legacy
+    total_price?: number // Actual DB column for contract value
     active: boolean
     payment_advance?: boolean
     remaining_sessions?: number
+    total_sessions?: number
+    pending_debt?: number // Calculated by backend
     member_id?: string | null
     member?: { full_name: string; email?: string; phone?: string } | null
 }
@@ -73,6 +79,7 @@ const DAYS = ['Domingo', 'Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', '
 export default function FixedMembersPage() {
     const { user, profile } = useAuth()
     const { toast } = useToast()
+    const router = useRouter()
     const [plans, setPlans] = useState<RecurringPlan[]>([])
     const [loading, setLoading] = useState(true)
     const [courtsMap, setCourtsMap] = useState<Record<string, string>>({})
@@ -104,11 +111,24 @@ export default function FixedMembersPage() {
     const [selectedDuration, setSelectedDuration] = useState<string>("12")
     const [customWeeks, setCustomWeeks] = useState<string>("")
 
+    // Incident Modal State
+    const [isIncidentModalOpen, setIsIncidentModalOpen] = useState(false)
+    const [incidentPlan, setIncidentPlan] = useState<RecurringPlan | null>(null)
+    const [incidentBooking, setIncidentBooking] = useState<any>(null)
+    const [incidentReason, setIncidentReason] = useState<string>("Lluvia")
+
+
     // Management Modal State
     const [viewingPlan, setViewingPlan] = useState<RecurringPlan | null>(null)
     const [isEditingPlan, setIsEditingPlan] = useState(false)
     const [isSaving, setIsSaving] = useState(false)
     const [deletingPlanId, setDeletingPlanId] = useState<string | null>(null)
+
+    // Smart Debt Manager State
+    const [pendingList, setPendingList] = useState<any[]>([])
+    const [selectedDebtIds, setSelectedDebtIds] = useState<string[]>([])
+    const [showDebtSelector, setShowDebtSelector] = useState(false)
+
     const [editForm, setEditForm] = useState({
         courtId: '',
         dayOfWeek: '0',
@@ -140,36 +160,58 @@ export default function FixedMembersPage() {
     // Sync Edit Form when Viewing Plan Changes
     useEffect(() => {
         if (viewingPlan) {
+            // Calculate Unit Price safely
+            // Logic: Total Contract Price / Total Sessions
+            let unitPrice = viewingPlan.price || 0
+            if (viewingPlan.total_price && viewingPlan.total_sessions && viewingPlan.total_sessions > 0) {
+                unitPrice = Math.round(viewingPlan.total_price / viewingPlan.total_sessions)
+            }
+
             setEditForm({
                 courtId: viewingPlan.court_id,
                 dayOfWeek: String(viewingPlan.day_of_week),
                 startTime: viewingPlan.start_time.slice(0, 5),
-                price: viewingPlan.price,
+                price: unitPrice,
                 paymentAdvance: viewingPlan.payment_advance || false
             })
             setIsEditingPlan(false)
         }
     }, [viewingPlan])
 
-    // Auto-calculate Start Date when Day changes (Smart Snap)
+    // Auto-calculate Start Date when Day changes (Smart Snap) - REMOVED FOR FLEXIBILITY
+    // Now we allow user to pick ANY start date. 
+    // We only visually warn if the Day of Week doesn't match the Date, 
+    // but the backend handles the "Next Occurrence" logic safely.
+    // However, for UX, if we change Day of Week, we MIGHT want to suggest the next matching date?
+    // Let's Keep it simple: User picks Date. We derive Day of Week? 
+    // OR User picks Day of Week, and we default StartDate to next occurrence, but allow Edit?
+
+    // Better UX: When Day of Week changes, if the current StartDate Day != Target Day, specific snap.
     useEffect(() => {
         const targetDay = parseInt(formData.dayOfWeek)
-        // Find next occurrence
-        let current = new Date()
-        // If today is the target day, we can start today, or next week? Usually today is fine if hour > now.
-        // But simply logic: Keep iterating until getDay() === targetDay
-        while (current.getDay() !== targetDay) {
-            current.setDate(current.getDate() + 1)
-        }
+        const currentParams = parseISO(formData.startDate)
 
-        // Update start date to this calculated snap
-        // Only if it's different to avoid loops, though strict equality check handles it.
-        // Also we only want to do this if the user hasn't manually picked a far future date?
-        // Let's assume if he changes Day of Week, he expects the date to realign.
-        setFormData(prev => ({
-            ...prev,
-            startDate: format(current, 'yyyy-MM-dd')
-        }))
+        // Only snap if meaningful change? 
+        // Actually, let's NOT snap automatically on mount, only on interaction.
+        // But since this runs on formData change...
+
+        if (currentParams.getDay() !== targetDay) {
+            let next = new Date(currentParams)
+            while (next.getDay() !== targetDay) {
+                next.setDate(next.getDate() + 1)
+            }
+            // Update smoothly
+            // setFormData... avoiding loop?
+            // The previous logic was causing rigidity.
+            // Let's just update ONLY if the user hasn't explicitly typed a date?
+            // Hard to track. 
+            // World Class approach: Reactively update, but allow user to change date back if they really want (though it would be invalid).
+            // The backend aligns it. Let's just snap forward to help them.
+            setFormData(prev => ({
+                ...prev,
+                startDate: format(next, 'yyyy-MM-dd')
+            }))
+        }
     }, [formData.dayOfWeek])
 
     // Auto-calculate End Date
@@ -196,16 +238,7 @@ export default function FixedMembersPage() {
 
         setLoading(true)
         try {
-            // 0. VAMPIRE HUNTER: Auto-deactivate expired plans
-            const todayISO = new Date().toISOString().split('T')[0]
-            const { error: vampireError } = await supabase
-                .from('recurring_plans')
-                .update({ active: false })
-                .eq('organization_id', orgId)
-                .eq('active', true)
-                .lt('end_date', todayISO)
-
-            if (vampireError) console.error("Vampire Hunter failed:", vampireError)
+            // 0. VAMPIRE HUNTER is now handled inside getRecurringPlans
 
             // 1. Fetch Courts (All)
             const { data: courtsData, error: courtsError } = await supabase
@@ -252,35 +285,19 @@ export default function FixedMembersPage() {
     }
 
     const reloadPlans = async () => {
-        const { data: plansData, error: plansError } = await supabase
-            .from('recurring_plans')
-            .select(`*, user:users(full_name, email, phone), member:club_members(full_name, email, phone)`)
-            .eq('organization_id', orgId)
-            .eq('active', true)
-            .order('created_at', { ascending: false })
-
-        if (!plansError && plansData) {
-            const now = new Date().toISOString()
-            const planIds = plansData.map((p: any) => p.id)
-
-            let counts: Record<string, number> = {}
-
-            if (planIds.length > 0) {
-                // Count FUTURE bookings (Real Remaining)
-                const { data: futureCounts } = await supabase
-                    .from('bookings')
-                    .select('recurring_plan_id')
-                    .in('recurring_plan_id', planIds)
-                    .gte('start_time', now)
-                    .neq('payment_status', 'canceled') // Don't count canceled
-
-                futureCounts?.forEach((b: any) => {
-                    if (b.recurring_plan_id) counts[b.recurring_plan_id] = (counts[b.recurring_plan_id] || 0) + 1
-                })
-            }
-
-            const enriched = plansData.map((p: any) => ({ ...p, remaining_sessions: counts[p.id] || 0 }))
-            setPlans(enriched)
+        if (!orgId) return
+        try {
+            const enriched = await getRecurringPlans(orgId)
+            // CRITICAL FIX: Map DB total_price to UI unit price
+            const uiPlans = enriched.map((p: any) => ({
+                ...p,
+                price: (p.total_price && p.total_sessions && p.total_sessions > 0)
+                    ? Math.round(p.total_price / p.total_sessions)
+                    : (p.price || 0)
+            }))
+            setPlans(uiPlans as RecurringPlan[])
+        } catch (error) {
+            console.error("Error loading plans:", error)
         }
     }
 
@@ -301,32 +318,19 @@ export default function FixedMembersPage() {
                 payment_advance: editForm.paymentAdvance
             }
 
-            // 2. Update Plan
-            const { error: planErr } = await supabase
-                .from('recurring_plans')
-                .update(updates)
-                .eq('id', viewingPlan.id)
+            // 2. Call Server Action (Smart Update)
+            const result = await updateRecurringPlan({
+                planId: viewingPlan.id,
+                courtId: editForm.courtId,
+                dayOfWeek: parseInt(editForm.dayOfWeek),
+                startTime: editForm.startTime,
+                price: editForm.price,
+                paymentAdvance: editForm.paymentAdvance
+            })
 
-            if (planErr) throw planErr
+            if (!result.success) throw new Error(result.error)
 
-            // 3. Sync Future Reservas (Accuracy Update)
-            if (confirm("¿Deseas aplicar estos cambios (Cancha y Precio) a todas las reservas futuras PENDIENTES de este plan?")) {
-                const now = new Date().toISOString()
-                const { error: bookingErr } = await supabase
-                    .from('bookings')
-                    .update({
-                        court_id: updates.court_id,
-                        price: updates.price // Sync core price column
-                    })
-                    .eq('recurring_plan_id', viewingPlan.id)
-                    .gte('start_time', now)
-                    .eq('payment_status', 'pending')
-
-                if (bookingErr) throw bookingErr
-                toast({ title: "Plan y Reservas Actualizados", description: "Se han actualizado las reservas futuras." })
-            } else {
-                toast({ title: "Plan Actualizado", description: "Los cambios aplicarán solo a nuevas generaciones." })
-            }
+            toast({ title: "Plan Actualizado", description: "El plan y sus reservas han sido reprogramados." })
 
             setViewingPlan({ ...viewingPlan, ...updates, start_time: editForm.startTime + ':00' } as any)
             setIsEditingPlan(false)
@@ -334,31 +338,108 @@ export default function FixedMembersPage() {
 
         } catch (error: any) {
             console.error(error)
-            toast({ title: "Error", description: "No se pudieron guardar los cambios.", variant: "destructive" })
+            toast({ title: "Error", description: error.message || "Error al actualizar.", variant: "destructive" })
         } finally {
             setIsSaving(false)
         }
     }
 
-    const handlePayMonthBatch = async () => {
-        if (!viewingPlan) return
+    // --- INCIDENT MANAGER LOGIC ---
 
-        if (!confirm(`¿Liquidar facturación de ${format(new Date(), 'MMMM vvvv', { locale: es })} para este socio?`)) return
+    const handleOpenIncident = async (plan: RecurringPlan) => {
+        setIncidentPlan(plan)
+        setLoading(true)
+        try {
+            const now = new Date().toISOString()
+            const { data } = await supabase
+                .from('bookings')
+                .select('*')
+                .eq('recurring_plan_id', plan.id)
+                .gte('start_time', now)
+                .neq('payment_status', 'canceled')
+                .order('start_time', { ascending: true })
+                .limit(1)
+                .single()
+
+            if (data) {
+                setIncidentBooking(data)
+                setIsIncidentModalOpen(true)
+            } else {
+                toast({ title: "Sin reservas futuras", description: "Este plan no tiene reservas activas futuras." })
+            }
+        } catch (e) {
+            console.error(e)
+            toast({ title: "Error", description: "No se pudo cargar la próxima reserva.", variant: "destructive" })
+        } finally {
+            setLoading(false)
+        }
+    }
+
+    const handleExecuteIncident = async () => {
+        if (!incidentPlan || !incidentBooking) return
+        setIsSaving(true)
+        try {
+            const result = await extendPlanDueToIncident(incidentPlan.id, incidentBooking.id, incidentReason)
+            if (!result.success) throw new Error(result.error)
+
+            toast({
+                title: "Contrato extendido 1 semana",
+                description: `Se canceló la sesión del ${format(parseISO(incidentBooking.start_time), 'dd/MM')} y se creó una nueva para ${result.newDate}.`,
+                className: "bg-blue-600 border-none text-white shadow-xl"
+            })
+
+            setIsIncidentModalOpen(false)
+            reloadPlans()
+            router.refresh()
+        } catch (e: any) {
+            console.error(e)
+            toast({ title: "Error", description: e.message, variant: "destructive" })
+        } finally {
+            setIsSaving(false)
+        }
+    }
+
+    // --- DEBT MANAGER LOGIC ---
+
+    const handleInitiateSettlement = async (plan?: RecurringPlan) => {
+        const targetPlan = plan || viewingPlan
+        if (!targetPlan) return
+
+        // If called from row, set viewing plan main state
+        if (plan) setViewingPlan(plan)
 
         setIsSaving(true)
         try {
-            const { data, error } = await supabase.rpc('pay_recurring_month_batch', {
-                p_plan_id: viewingPlan.id,
-                p_month_date: new Date().toISOString()
-            })
+            const pending = await getPendingBookings(targetPlan.id)
+            setPendingList(pending)
+            setSelectedDebtIds(pending.map((b: any) => b.id)) // Select all by default
+            setShowDebtSelector(true)
+        } catch (error) {
+            toast({ title: "Error", description: "No se pudo cargar la deuda.", variant: "destructive" })
+        } finally {
+            setIsSaving(false)
+        }
+    }
 
-            if (error) throw error
+    const handleExecuteSettlement = async () => {
+        if (!viewingPlan || selectedDebtIds.length === 0) return
+
+        setIsSaving(true)
+        try {
+            const { count, totalAmount } = await settlePlanBilling(viewingPlan.id, "", selectedDebtIds)
 
             toast({
-                title: "Facturación Liquidada",
-                description: `Se han cobrado ${data} reservas del mes actual.`,
+                title: "Pago Exitoso",
+                description: `Se cobraron $${totalAmount} (${count} reservas).`,
                 className: "bg-emerald-600 border-none text-white font-bold shadow-xl"
             })
+
+            // Optimistic UI Update & View Switch
+            setViewingPlan(prev => prev ? ({ ...prev, pending_debt: Math.max(0, (prev.pending_debt || 0) - totalAmount) }) : null)
+            setShowDebtSelector(false)
+
+            // Server Sync
+            router.refresh()
             reloadPlans()
         } catch (error: any) {
             console.error(error)
@@ -367,6 +448,9 @@ export default function FixedMembersPage() {
             setIsSaving(false)
         }
     }
+
+    // Legacy Batch Pay (kept for reference or full month shortcut if needed)
+    const handlePayMonthBatch = handleInitiateSettlement // Upgrade to Smart Flow
 
     const promptDeactivatePlan = (planId: string) => {
         setDeletingPlanId(planId)
@@ -414,110 +498,32 @@ export default function FixedMembersPage() {
 
         setCreating(true)
         try {
-            // 1. Generate Slots
-            const slots: { start: string, end: string, date: string }[] = []
-            let current = parseISO(formData.startDate)
-            const end = parseISO(formData.endDate)
-            const dayTarget = parseInt(formData.dayOfWeek)
-            const [hour, minute] = formData.startTime.split(':').map(Number)
-
-            // Normalize start date
-            while (current.getDay() !== dayTarget) {
-                current.setDate(current.getDate() + 1)
-            }
-            // If we went past end date (unlikely given start date is usually today)
-
-            // Loop weeks
-            while (isBefore(current, end) || current.getTime() === end.getTime()) {
-                const slotStart = new Date(current)
-                slotStart.setHours(hour, minute, 0, 0)
-                const slotEnd = addMinutes(slotStart, 90) // 90 min fixed
-
-                slots.push({
-                    start: slotStart.toISOString(),
-                    end: slotEnd.toISOString(),
-                    date: format(current, 'yyyy-MM-dd')
-                })
-
-                current = addWeeks(current, 1)
-            }
-
-            if (slots.length === 0) {
-                throw new Error(`No hay sesiones los ${DAYS[dayTarget]} entre las fechas seleccionadas.`)
-            }
-
-            // 2. Scan Conflicts
-            const rangeStart = slots[0].start
-            const rangeEnd = slots[slots.length - 1].end
-
-            const { data: conflicts } = await supabase
-                .from('bookings')
-                .select('start_time, end_time')
-                .eq('court_id', formData.courtId)
-                .gte('end_time', rangeStart)
-                .lte('start_time', rangeEnd)
-
-            const hasConflict = slots.some(slot => {
-                const sStart = new Date(slot.start).getTime()
-                const sEnd = new Date(slot.end).getTime()
-                return conflicts?.some((c: any) => {
-                    const cStart = new Date(c.start_time).getTime()
-                    const cEnd = new Date(c.end_time).getTime()
-                    return (sStart < cEnd && sEnd > cStart)
-                })
+            // Server Action Call
+            const result = await createRecurringPlan({
+                orgId: orgId!,
+                userId: formData.userId,
+                memberId: formData.memberId,
+                courtId: formData.courtId,
+                dayOfWeek: parseInt(formData.dayOfWeek),
+                startTime: formData.startTime,
+                startDate: formData.startDate,
+                endDate: formData.endDate,
+                price: parseFloat(formData.price),
+                paymentAdvance: formData.advancePayment
             })
 
-            if (hasConflict) {
-                toast({ title: "Conflicto de Horario", description: "Una o más sesiones coinciden con reservas existentes.", variant: "destructive" })
-                setCreating(false)
+            if (!result.success) {
+                toast({ title: "No se pudo crear", description: result.error, variant: "destructive" })
                 return
             }
 
-            // 3. Create Plan
-            const { data: plan, error: planError } = await supabase
-                .from('recurring_plans')
-                .insert({
-                    organization_id: orgId,
-                    user_id: formData.userId || null,
-                    member_id: formData.memberId || null,
-                    court_id: formData.courtId,
-                    day_of_week: parseInt(formData.dayOfWeek),
-                    start_time: formData.startTime + ':00',
-                    start_date: formData.startDate,
-                    end_date: formData.endDate,
-                    total_price: parseFloat(formData.price),
-                    active: true,
-                    payment_advance: formData.advancePayment
-                })
-                .select()
-                .single()
-
-            if (planError) throw planError
-
-            // 4. Batch Insert
-            const selectedUser = orgUsers.find(u => u.id === formData.userId)
-
-            const bookingsToInsert = slots.map(slot => ({
-                entity_id: orgId,
-                court_id: formData.courtId,
-                user_id: formData.userId || null,
-                start_time: slot.start,
-                end_time: slot.end,
-                title: selectedUser?.full_name || selectedMember?.full_name || 'Reserva Fija',
-                payment_status: formData.advancePayment ? 'paid' : 'pending',
-                recurring_plan_id: plan.id,
-            }))
-
-            const { error: batchError } = await supabase.from('bookings').insert(bookingsToInsert)
-            if (batchError) throw batchError
-
-            toast({ title: "Plan Creado", description: `Se han generado ${slots.length} reservas.` })
+            toast({ title: "Plan Creado", description: `Se han configurado ${result.count} sesiones.` })
             setIsCreateModalOpen(false)
             reloadPlans()
 
         } catch (error: any) {
             console.error(error)
-            toast({ title: "Error", description: error.message, variant: "destructive" })
+            toast({ title: "Error Fatal", description: error.message, variant: "destructive" })
         } finally {
             setCreating(false)
         }
@@ -749,11 +755,18 @@ export default function FixedMembersPage() {
                                         </div>
 
                                         <div className="grid gap-2">
-                                            <Label>Precio Total (Opcional)</Label>
+                                            <Label>Precio por Sesión (Override)</Label>
                                             <Input type="number" className="bg-zinc-900 border-zinc-700"
+                                                placeholder="Ej: 40 (Por partido)"
                                                 value={formData.price}
                                                 onChange={e => setFormData({ ...formData, price: e.target.value })}
                                             />
+                                            {/* PREVIEW TOTAL */}
+                                            {formData.price && parseInt(formData.price) > 0 && (
+                                                <p className="text-xs text-blue-400 font-medium text-right mt-1">
+                                                    Total del Contrato: <span className="text-white">${(parseInt(formData.price) * (selectedDuration === 'custom' ? (parseInt(customWeeks) || 0) : parseInt(selectedDuration)))}</span>
+                                                </p>
+                                            )}
                                         </div>
 
                                         <div className="flex items-center space-x-2 bg-zinc-900 p-3 rounded-lg border border-zinc-800">
@@ -798,6 +811,7 @@ export default function FixedMembersPage() {
                                 <TableHead className="text-zinc-400">Cancha Fija</TableHead>
                                 <TableHead className="text-zinc-400">Horario</TableHead>
                                 <TableHead className="text-zinc-400">Próximo Vencimiento</TableHead>
+                                <TableHead className="text-zinc-400">Estado</TableHead>
                                 <TableHead className="text-center text-zinc-400">Sesiones</TableHead>
                                 <TableHead className="text-right text-zinc-400">Acciones</TableHead>
                             </TableRow>
@@ -831,36 +845,73 @@ export default function FixedMembersPage() {
                                     <TableCell className="text-zinc-300">
                                         {format(parseISO(plan.end_date), "d 'de' MMM, yyyy", { locale: es })}
                                     </TableCell>
+                                    <TableCell>
+                                        {(plan.pending_debt || 0) > 0 ? (
+                                            <Badge
+                                                variant="outline"
+                                                onClick={() => setViewingPlan(plan)}
+                                                className="bg-red-500/10 text-red-400 border-red-500/30 cursor-pointer hover:bg-red-500/20 transition-colors"
+                                            >
+                                                Deuda: ${plan.pending_debt}
+                                            </Badge>
+                                        ) : (
+                                            <Badge variant="outline" className="bg-emerald-500/10 text-emerald-400 border-emerald-500/30">
+                                                Al día
+                                            </Badge>
+                                        )}
+                                    </TableCell>
                                     <TableCell className="text-center">
                                         <div className="flex flex-col items-center">
-                                            <Badge variant="outline" className={
-                                                (plan.remaining_sessions || 0) < 4
-                                                    ? "bg-red-500/10 text-red-400 border-red-500/20"
-                                                    : "bg-emerald-500/10 text-emerald-400 border-emerald-500/20"
-                                            }>
-                                                {plan.remaining_sessions} pendientes
-                                            </Badge>
-                                            <span className="text-[10px] text-zinc-500 mt-1">Por jugar</span>
+                                            {/* Progress Bar Logic */}
+                                            {(() => {
+                                                const total = plan.total_sessions || 1
+                                                const remaining = plan.remaining_sessions || 0
+                                                const completed = total - remaining
+                                                const percent = Math.min(100, Math.max(0, (completed / total) * 100))
+
+                                                return (
+                                                    <div className="w-24">
+                                                        <div className="flex justify-between text-xs mb-1 text-zinc-400">
+                                                            <span>{completed}/{total}</span>
+                                                            <span>{Math.round(percent)}%</span>
+                                                        </div>
+                                                        <div className="h-1.5 w-full bg-zinc-800 rounded-full overflow-hidden">
+                                                            <div className="h-full bg-emerald-500" style={{ width: `${percent}%` }}></div>
+                                                        </div>
+                                                    </div>
+                                                )
+                                            })()}
                                         </div>
                                     </TableCell>
                                     <TableCell className="text-right">
                                         <DropdownMenu>
                                             <DropdownMenuTrigger asChild>
-                                                <Button variant="ghost" className="h-8 w-8 p-0 text-zinc-400 hover:text-white">
+                                                <Button variant="ghost" className="h-8 w-8 p-0">
+                                                    <span className="sr-only">Abrir menú</span>
                                                     <MoreHorizontal className="h-4 w-4" />
                                                 </Button>
                                             </DropdownMenuTrigger>
                                             <DropdownMenuContent align="end" className="bg-zinc-950 border-zinc-800 text-white">
                                                 <DropdownMenuLabel>Acciones</DropdownMenuLabel>
-                                                <DropdownMenuItem className="cursor-pointer" onClick={() => setViewingPlan(plan)}>
-                                                    <FileText className="mr-2 h-4 w-4" /> Ver Contrato
+                                                <DropdownMenuItem onClick={() => {
+                                                    setViewingPlan(plan)
+                                                    setIsEditingPlan(true)
+                                                }}>
+                                                    <Pencil className="mr-2 h-4 w-4" /> Editar Plan
                                                 </DropdownMenuItem>
+                                                <DropdownMenuItem onClick={() => handleInitiateSettlement(plan)}>
+                                                    <CreditCard className="mr-2 h-4 w-4" /> Gestionar Pagos
+                                                </DropdownMenuItem>
+                                                <DropdownMenuItem onClick={(e) => {
+                                                    e.stopPropagation()
+                                                    handleOpenIncident(plan)
+                                                }}>
+                                                    <Umbrella className="mr-2 h-4 w-4" /> Gestionar Incidencia
+                                                </DropdownMenuItem>
+                                                <DropdownMenuSeparator className="bg-zinc-800" />
                                                 <DropdownMenuItem
-                                                    className="text-red-400 focus:text-red-400 cursor-pointer"
-                                                    onSelect={(e) => {
-                                                        e.preventDefault() // Prevent auto-close to handle state update smoothly
-                                                        promptDeactivatePlan(plan.id)
-                                                    }}
+                                                    className="text-red-400 focus:text-red-400"
+                                                    onClick={() => promptDeactivatePlan(plan.id)}
                                                 >
                                                     <X className="mr-2 h-4 w-4" /> Cancelar Plan
                                                 </DropdownMenuItem>
@@ -873,18 +924,97 @@ export default function FixedMembersPage() {
                     </Table>
                 </CardContent>
             </Card>
-            <Dialog open={!!viewingPlan} onOpenChange={(open) => !open && setViewingPlan(null)}>
-                <DialogContent className="bg-black/95 border-zinc-800 text-white sm:max-w-2xl p-0 overflow-hidden shadow-2xl">
-                    {/* Header */}
-                    {viewingPlan && (
+
+            {/* INCIDENT MODAL */}
+            <Dialog open={isIncidentModalOpen} onOpenChange={setIsIncidentModalOpen}>
+                <DialogContent className="bg-zinc-950 border-zinc-800 text-white sm:max-w-md">
+                    <DialogHeader>
+                        <DialogTitle className="flex items-center gap-2">
+                            <Umbrella className="h-5 w-5 text-blue-400" />
+                            Gestionar Incidencia
+                        </DialogTitle>
+                        <DialogDescription>
+                            Reprogramar sesión debido a lluvia o causa mayor.
+                        </DialogDescription>
+                    </DialogHeader>
+
+                    {incidentBooking ? (
+                        <div className="space-y-4 py-4">
+                            <div className="bg-zinc-900 p-4 rounded-md border border-zinc-800">
+                                <Label className="text-xs text-zinc-500 uppercase tracking-widest">Próxima Sesión Afectada</Label>
+                                <div className="mt-2 flex items-center justify-between">
+                                    <div className="flex flex-col">
+                                        <span className="font-medium text-lg text-white">
+                                            {format(parseISO(incidentBooking.start_time), "EEEE d 'de' MMMM", { locale: es })}
+                                        </span>
+                                        <span className="text-sm text-zinc-400">
+                                            {incidentBooking.start_time.slice(11, 16)} - {courtsMap[incidentBooking.court_id]}
+                                        </span>
+                                    </div>
+                                    <Badge variant={incidentBooking.payment_status === 'paid' ? 'default' : 'outline'} className={incidentBooking.payment_status === 'paid' ? "bg-emerald-500/20 text-emerald-400" : "text-yellow-400 border-yellow-500/30"}>
+                                        {incidentBooking.payment_status === 'paid' ? 'Pagada' : 'Pendiente'}
+                                    </Badge>
+                                </div>
+                            </div>
+
+                            <div className="space-y-2">
+                                <Label>Acción a realizar</Label>
+                                <div className="p-3 bg-blue-500/10 border border-blue-500/20 rounded-md">
+                                    <h4 className="text-sm font-medium text-blue-400 mb-1">Saltar y Extender (Push to End)</h4>
+                                    <p className="text-xs text-zinc-300">
+                                        Se <strong>cancelará</strong> esta sesión y se creará una nueva automáticamente
+                                        al final del contrato (una semana después de la última fecha).
+                                    </p>
+                                </div>
+                            </div>
+
+                            <div className="space-y-2">
+                                <Label>Motivo</Label>
+                                <Select value={incidentReason} onValueChange={setIncidentReason}>
+                                    <SelectTrigger className="bg-zinc-900 border-zinc-700">
+                                        <SelectValue />
+                                    </SelectTrigger>
+                                    <SelectContent className="bg-zinc-900 border-zinc-700 text-white">
+                                        <SelectItem value="Lluvia">Lluvia / Clima</SelectItem>
+                                        <SelectItem value="Mantenimiento">Mantenimiento de Cancha</SelectItem>
+                                        <SelectItem value="Ausencia Justificada">Ausencia Justificada</SelectItem>
+                                        <SelectItem value="Otro">Otro</SelectItem>
+                                    </SelectContent>
+                                </Select>
+                            </div>
+                        </div>
+                    ) : (
+                        <div className="py-8 text-center text-zinc-500">Cargando información...</div>
+                    )}
+
+                    <DialogFooter>
+                        <Button variant="ghost" onClick={() => setIsIncidentModalOpen(false)}>Cancelar</Button>
+                        <Button onClick={handleExecuteIncident} disabled={isSaving} className="bg-blue-600 hover:bg-blue-700">
+                            {isSaving ? <Loader2 className="h-4 w-4 animate-spin" /> : "Confirmar Cambio"}
+                        </Button>
+                    </DialogFooter>
+                </DialogContent>
+            </Dialog>
+            <Dialog open={!!viewingPlan} onOpenChange={(open) => {
+                if (!open) {
+                    setViewingPlan(null)
+                    setShowDebtSelector(false)
+                    setPendingList([])
+                }
+            }}>
+                <DialogContent className="bg-black/95 border-zinc-800 text-white sm:max-w-2xl p-0 overflow-hidden shadow-2xl h-[600px] flex flex-col">
+                    {viewingPlan && !showDebtSelector ? (
                         <>
-                            <div className="bg-zinc-900/60 p-6 border-b border-zinc-800 flex items-center gap-4">
+                            {/* --- STANDARD VIEW --- */}
+
+                            {/* Header */}
+                            <div className="bg-zinc-900/60 p-6 border-b border-zinc-800 flex items-center gap-4 shrink-0">
                                 <div className="h-16 w-16 rounded-full bg-gradient-to-br from-blue-500 to-blue-700 flex items-center justify-center text-white shadow-lg border-2 border-zinc-900">
                                     <span className="text-xl font-bold">{viewingPlan.user?.full_name?.[0] || 'U'}</span>
                                 </div>
                                 <div className="flex-1">
                                     <div className="flex items-center gap-2 mb-1">
-                                        <h2 className="text-xl font-bold text-white">{viewingPlan.user?.full_name || 'Sin Nombre'}</h2>
+                                        <h2 className="text-xl font-bold text-white">{viewingPlan.user?.full_name || viewingPlan.member?.full_name || 'Sin Nombre'}</h2>
                                         <Badge className="bg-blue-600/20 text-blue-300 border-blue-500/30 hover:bg-blue-600/30">
                                             Socio Fijo Activo
                                         </Badge>
@@ -895,7 +1025,8 @@ export default function FixedMembersPage() {
                                 </div>
                             </div>
 
-                            <div className="p-6 space-y-6">
+                            {/* Scrollable Content */}
+                            <div className="p-6 space-y-6 flex-1 overflow-y-auto">
                                 {/* Main Columns */}
                                 <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
 
@@ -971,33 +1102,62 @@ export default function FixedMembersPage() {
                                     </div>
                                 </div>
 
-                                {/* Action Card (Payment) - Visible ONLY if NOT editing */}
+                                {/* Action Card (Smart Debt Trigger) */}
                                 {!isEditingPlan && (
-                                    <div className="relative group overflow-hidden rounded-xl border border-emerald-500/30 bg-gradient-to-r from-emerald-950/30 to-zinc-900/50 p-1">
-                                        <div className="absolute inset-0 bg-emerald-500/5 group-hover:bg-emerald-500/10 transition-colors" />
+                                    <div className={`relative group overflow-hidden rounded-xl border p-1 transition-all ${(viewingPlan.pending_debt || 0) > 0
+                                        ? "border-red-500/30 bg-gradient-to-r from-red-950/30 to-zinc-900/50"
+                                        : "border-emerald-500/30 bg-gradient-to-r from-emerald-950/30 to-zinc-900/50 opacity-80"
+                                        }`}>
+                                        <div className={`absolute inset-0 ${(viewingPlan.pending_debt || 0) > 0
+                                            ? "bg-red-500/5 group-hover:bg-red-500/10"
+                                            : "bg-emerald-500/5"
+                                            } transition-colors`} />
+
                                         <button
-                                            onClick={handlePayMonthBatch}
-                                            className="relative flex items-center justify-between w-full p-4 cursor-pointer"
+                                            onClick={() => handleInitiateSettlement()}
+                                            disabled={(viewingPlan.pending_debt || 0) <= 0}
+                                            className="relative flex items-center justify-between w-full p-4 cursor-pointer disabled:cursor-default"
                                         >
                                             <div className="flex items-center gap-4">
-                                                <div className="h-10 w-10 rounded-full bg-emerald-500/20 flex items-center justify-center text-emerald-400 border border-emerald-500/30">
+                                                <div className={`h-10 w-10 rounded-full flex items-center justify-center border ${(viewingPlan.pending_debt || 0) > 0
+                                                    ? "bg-red-500/20 text-red-400 border-red-500/30"
+                                                    : "bg-emerald-500/20 text-emerald-400 border-emerald-500/30"
+                                                    }`}>
                                                     <Banknote className="h-5 w-5" />
                                                 </div>
                                                 <div className="text-left">
-                                                    <h4 className="font-bold text-emerald-100">Liquidar Facturación de {format(new Date(), 'MMMM', { locale: es })}</h4>
-                                                    <p className="text-xs text-emerald-400/70">Marcar todas las reservas de este mes como PAGADAS</p>
+                                                    <h4 className={`font-bold ${(viewingPlan.pending_debt || 0) > 0 ? "text-red-100" : "text-emerald-100"
+                                                        }`}>
+                                                        {(viewingPlan.pending_debt || 0) > 0
+                                                            ? `Gestionar Pagos Pendientes ($${viewingPlan.pending_debt})`
+                                                            : "Pagos al día"
+                                                        }
+                                                    </h4>
+                                                    <p className={`text-xs ${(viewingPlan.pending_debt || 0) > 0 ? "text-red-400/70" : "text-emerald-400/70"
+                                                        }`}>
+                                                        {(viewingPlan.pending_debt || 0) > 0
+                                                            ? "Clic para seleccionar reservas y pagar"
+                                                            : "No hay deuda pendiente"
+                                                        }
+                                                    </p>
                                                 </div>
                                             </div>
-                                            <div className="bg-emerald-500/20 p-2 rounded-full">
-                                                <CheckCircle2 className="h-5 w-5 text-emerald-400" />
-                                            </div>
+                                            {(viewingPlan.pending_debt || 0) > 0 ? (
+                                                <div className="bg-red-500/20 p-2 rounded-full animate-pulse">
+                                                    <AlertTriangle className="h-5 w-5 text-red-400" />
+                                                </div>
+                                            ) : (
+                                                <div className="bg-emerald-500/20 p-2 rounded-full">
+                                                    <CheckCircle2 className="h-5 w-5 text-emerald-400" />
+                                                </div>
+                                            )}
                                         </button>
                                     </div>
                                 )}
                             </div>
 
                             {/* Footer */}
-                            <div className="bg-zinc-950 p-6 pt-2 flex flex-col gap-4">
+                            <div className="bg-zinc-950 p-6 pt-2 flex flex-col gap-4 mt-auto">
                                 {isEditingPlan ? (
                                     <div className="flex gap-3">
                                         <Button
@@ -1005,12 +1165,12 @@ export default function FixedMembersPage() {
                                             onClick={() => setIsEditingPlan(false)}
                                             className="flex-1 border-zinc-700 text-zinc-300 h-11"
                                         >
-                                            Cancelar Edición
+                                            Cancelar
                                         </Button>
                                         <Button
                                             onClick={handleSaveChanges}
                                             disabled={isSaving}
-                                            className="flex-[2] bg-blue-600 hover:bg-blue-700 text-white h-11 shadow-lg shadow-blue-900/20 font-semibold"
+                                            className="flex-[2] bg-blue-600 hover:bg-blue-700 text-white h-11 shadow-lg font-semibold"
                                         >
                                             {isSaving ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : "Guardar Cambios"}
                                         </Button>
@@ -1026,7 +1186,7 @@ export default function FixedMembersPage() {
                                         </Button>
                                         <Button
                                             onClick={() => setIsEditingPlan(true)}
-                                            className="flex-[2] bg-blue-600 hover:bg-blue-700 text-white h-11 shadow-lg shadow-blue-900/20 font-semibold"
+                                            className="flex-[2] bg-blue-600 hover:bg-blue-700 text-white h-11 shadow-lg font-semibold"
                                         >
                                             <Pencil className="h-4 w-4 mr-2" /> Editar Plan
                                         </Button>
@@ -1043,12 +1203,87 @@ export default function FixedMembersPage() {
                                 )}
                             </div>
                         </>
+                    ) : (
+                        // --- SMART DEBT SELECTOR VIEW ---
+                        <div className="flex flex-col h-full bg-zinc-950">
+                            <div className="p-6 border-b border-zinc-800 flex items-center justify-between bg-zinc-900/50 shrink-0">
+                                <div>
+                                    <h2 className="text-xl font-bold text-white flex items-center gap-2">
+                                        <Banknote className="h-5 w-5 text-emerald-400" />
+                                        Liquidar Deuda
+                                    </h2>
+                                    <p className="text-sm text-zinc-400">Selecciona las reservas a pagar ahora.</p>
+                                </div>
+                                <div className="text-right">
+                                    <p className="text-xs text-zinc-500 uppercase tracking-wider">Total Seleccionado</p>
+                                    <p className="text-2xl font-bold text-emerald-400">
+                                        ${pendingList.filter(b => selectedDebtIds.includes(b.id)).reduce((sum, b) => sum + (Number(b.price) || 0), 0)}
+                                    </p>
+                                </div>
+                            </div>
+
+                            <div className="flex-1 overflow-y-auto p-2 space-y-1">
+                                {pendingList.length === 0 ? (
+                                    <div className="text-center py-10 text-zinc-500">
+                                        No se encontraron deudas pendientes.
+                                    </div>
+                                ) : pendingList.map((booking) => (
+                                    <div
+                                        key={booking.id}
+                                        className={`flex items-center gap-4 p-3 rounded-lg border transition-all ${selectedDebtIds.includes(booking.id)
+                                            ? "bg-emerald-950/20 border-emerald-500/30"
+                                            : "bg-zinc-900/40 border-zinc-800 opacity-60"
+                                            }`}
+                                    >
+                                        <Checkbox
+                                            checked={selectedDebtIds.includes(booking.id)}
+                                            onCheckedChange={(c) => {
+                                                if (c) setSelectedDebtIds(prev => [...prev, booking.id])
+                                                else setSelectedDebtIds(prev => prev.filter(id => id !== booking.id))
+                                            }}
+                                            className="data-[state=checked]:bg-emerald-500 border-zinc-600"
+                                        />
+                                        <div className="flex-1 grid grid-cols-2 gap-2">
+                                            <div className="flex flex-col">
+                                                <span className="font-medium text-zinc-200">
+                                                    {format(parseISO(booking.start_time), "EEEE d MMM", { locale: es })}
+                                                </span>
+                                                <span className="text-xs text-zinc-500">
+                                                    {format(parseISO(booking.start_time), "HH:mm")} • {booking.court?.name || 'Cancha'}
+                                                </span>
+                                            </div>
+                                            <div className="text-right font-mono text-zinc-300">
+                                                ${booking.price}
+                                            </div>
+                                        </div>
+                                    </div>
+                                ))}
+                            </div>
+
+                            <div className="p-4 border-t border-zinc-800 flex gap-3 bg-zinc-900/30 shrink-0">
+                                <Button
+                                    variant="ghost"
+                                    onClick={() => setShowDebtSelector(false)}
+                                    className="flex-1 text-zinc-400 hover:text-white"
+                                >
+                                    Volver
+                                </Button>
+                                <Button
+                                    onClick={handleExecuteSettlement}
+                                    disabled={selectedDebtIds.length === 0 || isSaving}
+                                    className="flex-[2] bg-emerald-600 hover:bg-emerald-700 text-white font-bold h-11"
+                                >
+                                    {isSaving ? <Loader2 className="animate-spin" /> : "Confirmar Pago"}
+                                </Button>
+                            </div>
+                        </div>
                     )}
                 </DialogContent>
-            </Dialog>
+            </Dialog >
 
             {/* Confirmation Dialog */}
-            <Dialog open={!!deletingPlanId} onOpenChange={(open) => !open && setDeletingPlanId(null)}>
+            < Dialog open={!!deletingPlanId
+            } onOpenChange={(open) => !open && setDeletingPlanId(null)}>
                 <DialogContent className="bg-zinc-950 border-zinc-800 text-white sm:max-w-md">
                     <DialogHeader>
                         <DialogTitle className="flex items-center gap-2 text-red-500">
@@ -1077,8 +1312,8 @@ export default function FixedMembersPage() {
                         </Button>
                     </DialogFooter>
                 </DialogContent>
-            </Dialog>
-        </div>
+            </Dialog >
+        </div >
     )
 }
 
